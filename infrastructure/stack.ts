@@ -1,0 +1,205 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { CfnOutput, Duration, Fn, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
+import { CfnRuntime } from "aws-cdk-lib/aws-bedrockagentcore";
+import { AllowedMethods, CachePolicy, Distribution, PriceClass, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
+import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
+import {
+  AccountRecovery,
+  CfnUserPoolIdentityProvider,
+  OAuthScope,
+  UserPool,
+  UserPoolClientIdentityProvider,
+} from "aws-cdk-lib/aws-cognito";
+import { Effect, PolicyStatement, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import { BlockPublicAccess, Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
+import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
+import type { Construct } from "constructs";
+import { MODEL_CATALOG } from "../shared/model-catalog.js";
+
+const root = path.dirname(fileURLToPath(import.meta.url));
+const entraProviderName = "MicrosoftEntraID";
+
+function contextString(scope: Construct, name: string): string {
+  const value = scope.node.tryGetContext(name);
+  if (typeof value !== "string" || !value.trim()) throw new Error(`CDK context ${name} is required when Entra ID is enabled`);
+  return value.trim();
+}
+
+export class WorkmateCodeZipStack extends Stack {
+  constructor(scope: Construct, id: string, props?: StackProps) {
+    super(scope, id, props);
+
+    const entraEnabledValue = this.node.tryGetContext("entraEnabled");
+    const entraEnabled = entraEnabledValue === true || entraEnabledValue === "true";
+    const configuredDomainPrefix = this.node.tryGetContext("cognitoDomainPrefix");
+    if (configuredDomainPrefix !== undefined && (typeof configuredDomainPrefix !== "string" || !/^[a-z0-9-]{1,63}$/.test(configuredDomainPrefix))) {
+      throw new Error("cognitoDomainPrefix must contain only lowercase letters, numbers, and hyphens");
+    }
+    const domainPrefix = typeof configuredDomainPrefix === "string" ? configuredDomainPrefix : `workmate12-${this.account}`;
+
+    const webBucket = new Bucket(this, "WebAssets", {
+      encryption: BucketEncryption.S3_MANAGED,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      autoDeleteObjects: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    const distribution = new Distribution(this, "Distribution", {
+      defaultRootObject: "index.html",
+      defaultBehavior: {
+        origin: S3BucketOrigin.withOriginAccessControl(webBucket),
+        allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        cachePolicy: CachePolicy.CACHING_OPTIMIZED,
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        compress: true,
+      },
+      additionalBehaviors: {
+        "runtime-config.json": {
+          origin: S3BucketOrigin.withOriginAccessControl(webBucket),
+          allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+          cachePolicy: CachePolicy.CACHING_DISABLED,
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
+      },
+      errorResponses: [
+        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: "/index.html", ttl: Duration.seconds(0) },
+        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: "/index.html", ttl: Duration.seconds(0) },
+      ],
+      priceClass: PriceClass.PRICE_CLASS_100,
+    });
+    const applicationUrl = `https://${distribution.distributionDomainName}`;
+
+    const userPool = new UserPool(this, "UserPool", {
+      userPoolName: "workmate-codezip-users",
+      selfSignUpEnabled: false,
+      signInAliases: { email: true },
+      signInCaseSensitive: false,
+      autoVerify: { email: true },
+      standardAttributes: { email: { required: true, mutable: true }, fullname: { required: false, mutable: true } },
+      passwordPolicy: { minLength: 12, requireDigits: true, requireLowercase: true, requireUppercase: true, requireSymbols: true, tempPasswordValidity: Duration.days(7) },
+      accountRecovery: AccountRecovery.EMAIL_ONLY,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    const userPoolDomain = userPool.addDomain("Domain", {
+      cognitoDomain: { domainPrefix },
+    });
+
+    let entraProvider: CfnUserPoolIdentityProvider | undefined;
+    if (entraEnabled) {
+      const tenantId = contextString(this, "entraTenantId");
+      const clientId = contextString(this, "entraClientId");
+      const clientSecretName = contextString(this, "entraClientSecretName");
+      entraProvider = new CfnUserPoolIdentityProvider(this, "EntraIdentityProvider", {
+        userPoolId: userPool.userPoolId,
+        providerName: entraProviderName,
+        providerType: "OIDC",
+        providerDetails: {
+          attributes_request_method: "GET",
+          authorize_scopes: "openid email",
+          client_id: clientId,
+          client_secret: SecretValue.secretsManager(clientSecretName).unsafeUnwrap(),
+          oidc_issuer: `https://login.microsoftonline.com/${tenantId}/v2.0`,
+        },
+        attributeMapping: { email: "email", username: "sub" },
+      });
+    }
+
+    const supportedIdentityProviders = [UserPoolClientIdentityProvider.COGNITO];
+    if (entraEnabled) supportedIdentityProviders.push(UserPoolClientIdentityProvider.custom(entraProviderName));
+    const userPoolClient = userPool.addClient("WebClient", {
+      userPoolClientName: "workmate-codezip-web",
+      generateSecret: false,
+      authFlows: { userPassword: true, userSrp: true },
+      supportedIdentityProviders,
+      preventUserExistenceErrors: true,
+      accessTokenValidity: Duration.hours(1),
+      idTokenValidity: Duration.hours(1),
+      refreshTokenValidity: Duration.days(30),
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [OAuthScope.OPENID, OAuthScope.EMAIL, OAuthScope.PROFILE],
+        callbackUrls: [`${applicationUrl}/`, "http://localhost:5173/"],
+        logoutUrls: [`${applicationUrl}/`, "http://localhost:5173/"],
+      },
+    });
+    if (entraProvider) userPoolClient.node.addDependency(entraProvider);
+
+    const artifactBucket = new Bucket(this, "RuntimeArtifacts", {
+      encryption: BucketEncryption.S3_MANAGED,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      enforceSSL: true,
+      autoDeleteObjects: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    const runtimeKeyPrefix = "runtime";
+    const runtimeUpload = new BucketDeployment(this, "RuntimeUpload", {
+      destinationBucket: artifactBucket,
+      destinationKeyPrefix: runtimeKeyPrefix,
+      sources: [Source.asset(path.join(root, "..", "runtime", "deployment_package.zip"))],
+      extract: false,
+      prune: true,
+    });
+    const runtimeObjectKey = Fn.join("/", [runtimeKeyPrefix, Fn.select(0, runtimeUpload.objectKeys)]);
+    const runtimeRole = new Role(this, "RuntimeRole", { assumedBy: new ServicePrincipal("bedrock-agentcore.amazonaws.com") });
+    runtimeRole.addToPolicy(new PolicyStatement({
+      effect: Effect.ALLOW,
+      actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+      resources: MODEL_CATALOG.flatMap((model) => model.modelId.startsWith("us.")
+        ? [
+          `arn:${this.partition}:bedrock:${this.region}:${this.account}:inference-profile/${model.modelId}`,
+          ...["us-east-1", "us-east-2", "us-west-2"].flatMap((region) => model.foundationModelIds.map((foundationModelId) => `arn:${this.partition}:bedrock:${region}::foundation-model/${foundationModelId}`)),
+        ]
+        : model.foundationModelIds.map((foundationModelId) => `arn:${this.partition}:bedrock:${this.region}::foundation-model/${foundationModelId}`)),
+    }));
+    artifactBucket.grantRead(runtimeRole);
+    const agentRuntime = new CfnRuntime(this, "AgentRuntime", {
+      agentRuntimeName: "workmate_codezip_direct",
+      description: "Workmate 12 browser-direct AG-UI CodeZip runtime",
+      agentRuntimeArtifact: { codeConfiguration: { code: { s3: { bucket: artifactBucket.bucketName, prefix: runtimeObjectKey } }, runtime: "NODE_22", entryPoint: ["dist/app.js"] } },
+      authorizerConfiguration: {
+        customJwtAuthorizer: {
+          discoveryUrl: `https://cognito-idp.${this.region}.amazonaws.com/${userPool.userPoolId}/.well-known/openid-configuration`,
+          allowedClients: [userPoolClient.userPoolClientId],
+        },
+      },
+      roleArn: runtimeRole.roleArn,
+      networkConfiguration: { networkMode: "PUBLIC" },
+      lifecycleConfiguration: { idleRuntimeSessionTimeout: 300, maxLifetime: 1800 },
+      protocolConfiguration: "AGUI",
+      environmentVariables: { AWS_REGION: this.region },
+    });
+    agentRuntime.node.addDependency(runtimeUpload);
+
+    const webDeployment = new BucketDeployment(this, "WebDeployment", {
+      destinationBucket: webBucket,
+      sources: [
+        Source.asset(path.join(root, "..", "dist")),
+        Source.jsonData("runtime-config.json", {
+          environment: "production",
+          auth: {
+            region: this.region,
+            userPoolId: userPool.userPoolId,
+            userPoolClientId: userPoolClient.userPoolClientId,
+            cognitoDomain: `${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com`,
+            entraEnabled,
+            entraProviderName: entraEnabled ? entraProviderName : null,
+          },
+          agent: { runtimeArn: agentRuntime.attrAgentRuntimeArn, qualifier: "DEFAULT" },
+        }),
+      ],
+      distribution,
+      distributionPaths: ["/*"],
+      prune: true,
+    });
+    webDeployment.node.addDependency(agentRuntime);
+
+    new CfnOutput(this, "ApplicationUrl", { value: applicationUrl });
+    new CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });
+    new CfnOutput(this, "UserPoolClientId", { value: userPoolClient.userPoolClientId });
+    new CfnOutput(this, "CognitoDomain", { value: `${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com` });
+    new CfnOutput(this, "EntraRedirectUri", { value: `https://${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com/oauth2/idpresponse` });
+    new CfnOutput(this, "AgentRuntimeArn", { value: agentRuntime.attrAgentRuntimeArn });
+    new CfnOutput(this, "RuntimeArtifactsBucketName", { value: artifactBucket.bucketName });
+  }
+}

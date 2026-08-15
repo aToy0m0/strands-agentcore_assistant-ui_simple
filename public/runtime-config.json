@@ -1,0 +1,15 @@
+{
+  "environment": "local",
+  "auth": {
+    "region": "",
+    "userPoolId": "",
+    "userPoolClientId": "",
+    "cognitoDomain": "",
+    "entraEnabled": false,
+    "entraProviderName": null
+  },
+  "agent": {
+    "runtimeArn": "",
+    "qualifier": "DEFAULT"
+  }
+}

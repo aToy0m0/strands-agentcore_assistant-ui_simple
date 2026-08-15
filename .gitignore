@@ -1,0 +1,14 @@
+node_modules/
+dist/
+cdk.out/
+cdk.out.*/
+runtime/node_modules/
+runtime/dist/
+runtime/deployment_package.zip
+coverage/
+.env
+.env.*
+!.env.example
+*.pem
+.DS_Store
+*.tsbuildinfo
