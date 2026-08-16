@@ -6,7 +6,7 @@
 > AgentCore RuntimeへのブラウザからのAG-UI直接接続を検証することが目的です。
 > レート制限、WAF、セキュリティレスポンスヘッダー、アクセスログ、監査証跡を実装していません。
 > Microsoft Entra IDとのSSO連携は実テナントで疎通まで確認済みですが、管理者アカウント1件での確認にとどまります。
-> そのまま業務利用しないでください。詳細は[既知の制約とセキュリティ上の注意](#既知の制約とセキュリティ上の注意)を参照してください。
+> そのまま業務利用しないでください。詳細は[セキュリティ上の注意と既知の制約](doc/security-notes.md)を参照してください。
 
 ## 構成図
 
@@ -55,9 +55,37 @@ Dockerは不要です。CodeZipと静的フロントエンドだけをビルド�
 
 ローカル検証、デプロイ、Microsoft Entra ID連携、削除の手順は[デプロイ手順書](doc/deployment-guide.md)にまとめています。
 
+## ログ
+
+AgentCore Runtimeのログを、保持期間つきのCloudWatch Logsロググループへ配信します。ロググループ名はスタック出力`RuntimeLogGroupName`で確認できます。
+
+保持期間の既定は3日です。デプロイ時に変更できます。指定できるのはCloudWatch Logsが受け付ける日数（1、3、5、7、14、30、…）だけで、それ以外はsynthが停止します。
+
+```powershell
+npm run deploy -- -c cognitoDomainPrefix=<unique-domain-prefix> -c logRetentionDays=30
+```
+
+配信するのは`APPLICATION_LOGS`（エージェント実行時のログ）と`USAGE_LOGS`（セッション単位の消費量）です。
+
+Runtimeは1行1JSONの構造化ログを出します。CloudWatch Logs Insightsで`event`や`threadId`で絞り込めます。
+
+| 種別 | 出力内容 | 無効化するコンテキスト |
+|---|---|---|
+| `request` | 受信したAG-UI入力。**利用者のメッセージ本文を含む** | `-c runtimeLogRequest=off` |
+| `model` | 応答完了時の本文、思考の文字数、所要時間。**モデルの応答本文を含む** | `-c runtimeLogModel=off` |
+| `tool` | ツール名、引数、実行結果 | `-c runtimeLogTool=off` |
+| エラー | 失敗時のメッセージとスタック | 無効化できない |
+
+> **既定では利用者の入力とモデルの応答がそのままCloudWatch Logsへ残ります。**
+> 個人情報や秘密情報を扱う場合は`runtimeLogRequest`と`runtimeLogModel`を`off`にしてください。
+> 本番ではロググループの暗号化、アクセス制御、Data Protection policyも併せて設計します。
+
+X-Rayトレースとスパン（CloudWatch GenAI Observability）は含めていません。AWSアカウント・リージョン単位でCloudWatch Transaction Searchを有効にする必要があり、このスタックの範囲外としています。
+
 ## CDKで作る主なリソース
 
 - Cognito User Pool / App Client / Cognito domain
+- Runtimeログ用のCloudWatch Logsロググループと配信設定
 - オプションのEntra OIDC Identity Provider
 - 非公開Web S3バケット / CloudFront OAC Distribution
 - 非公開CodeZip S3バケット / BucketDeployment
@@ -66,40 +94,9 @@ Dockerは不要です。CodeZipと静的フロントエンドだけをビルド�
 
 `RuntimeArtifactsBucketName`をCloudFormation outputへ出すため、CDKが作成したS3へZIPが投入されたことを確認できます。
 
-## 既知の制約とセキュリティ上の注意
+## セキュリティ上の注意
 
-研究・学習用途のサンプルとして、次を理解した上で使用してください。
-
-### 認証境界は機能している
-
-CloudFrontの公開URLを第三者が見つけても、次は成立しません。
-
-- AgentCore Runtimeは`customJwtAuthorizer`で保護され、Cognitoが発行し`allowedClients`に一致するJWTがなければAWS側で拒否されます。**未認証でのBedrock呼び出しはできません**
-- `selfSignUpEnabled: false`のため、アカウントの自己登録はできません
-- パスワードは12文字以上で大文字・小文字・数字・記号が必須です
-- `preventUserExistenceErrors`が有効なため、ユーザー列挙ができません
-
-`runtime-config.json`は公開され、User Pool IDとApp Client IDが誰でも読めます。これらはpublic App Clientの仕様上そもそも秘密情報ではなく、SPAである以上隠蔽できません。
-
-### 未実装の防御
-
-| 項目 | 内容 | 想定される影響 |
-|---|---|---|
-| セキュリティレスポンスヘッダー | CSP、X-Frame-Options、HSTS、X-Content-Type-Optionsが未設定 | ログイン済みユーザーに対するクリックジャッキングが成立する。XSSが生じた場合の多層防御がない |
-| レート制限・使用量上限 | Runtimeにレート制限がなく、WAFも未設定 | 認証済みユーザー1人がBedrockを無制限に呼び出せる。クライアントの不具合や連投で課金が膨らむ |
-| 認証フロー | `USER_PASSWORD_AUTH`が有効。Amplifyは既定でSRPを使うため実際には不要 | 総当たりに使いやすい認証経路が余分に開いている |
-| リダイレクトURL | 本番App Clientのcallback/logout URLに`http://localhost:5173/`が含まれる | 開発用リダイレクト先が本番クライアントに残る |
-| トークン保管 | JWTはAmplifyの既定で`localStorage`に保存される | XSSが生じた場合にトークンが露出する。httpOnly Cookieにするには本構成が排除したBFFが必要 |
-| ログ・監査 | CloudFrontとS3のアクセスログが未設定 | インシデント発生時に追跡できない |
-| エラー表示 | ログイン失敗時にCognitoの原文メッセージをそのまま表示する | 内部エラー文言が利用者に見える |
-
-### 検証範囲
-
-- **Microsoft Entra IDとのSSO連携は2026-08-16に実テナントで疎通確認済みです。** Identity Providerの作成、テナント全体の管理者同意、Entra経由のログイン、AgentCore RuntimeへのJWT到達（ツール実行を含む応答完了）まで確認しました。確認は管理者アカウント1件のみで、複数ユーザーやグループ割り当て下での動作は未確認です
-- Entra経由のログインでは、ユーザー情報の取得に`fetchUserAttributes`（Cognitoの`GetUser`API）を使えません。アクセストークンに`aws.cognito.signin.user.admin`スコープが必要ですが、Hosted UIのAuthorization Code FlowではApp Clientに許可したスコープ（`openid email profile`）しか付与されないためです。現在はIDトークンのクレームから表示名を組み立てています（`src/lib/current-user.ts`）
-- 管理者以外の一般ユーザーによるログインは未確認です。手順2の管理者同意とユーザー割り当てを両方済ませる必要があります
-- テストは設定とユーティリティ層のみです。UIコンポーネントテストとE2Eテストはありません
-- 実画面の動作確認はデプロイ後の手動確認を前提としています
+**このサンプルには未実装の防御があります。** 認証境界として機能している部分、未実装の防御、検証済みの範囲を[セキュリティ上の注意と既知の制約](doc/security-notes.md)にまとめています。利用前に必ず確認してください。
 
 ## 既知の不具合
 
