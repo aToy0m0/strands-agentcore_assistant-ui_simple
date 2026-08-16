@@ -93,3 +93,34 @@ describe("toSafeAgentOutput", () => {
     ]);
   });
 });
+
+describe("toSafeAgentOutput reasoningタグの漏れ", () => {
+  function textDelta(text: string) {
+    return { type: "modelStreamUpdateEvent", event: { type: "modelContentBlockDeltaEvent", delta: { type: "textDelta", text } } };
+  }
+
+  it("本文へ漏れた<reasoning>を思考チャンネルへ振り分ける", async () => {
+    const events = stream([
+      textDelta("元気です！"),
+      textDelta("<reasoning>Now text_stat"),
+      textDelta("istics example.</reasoning>"),
+      textDelta("以下がデモです。"),
+    ] as AgentStreamEvent[]);
+
+    const output = [];
+    for await (const event of toSafeAgentOutput(events, { model: "gpt-oss-20b", reasoning: { enabled: true, effort: "medium" } })) output.push(event);
+
+    const text = output.filter((event) => event.type === "text").map((event) => event.text).join("");
+    const reasoning = output.filter((event) => event.type === "reasoning").map((event) => event.text).join("");
+    expect(text).toBe("元気です！以下がデモです。");
+    expect(text).not.toContain("<reasoning>");
+    expect(reasoning).toContain("Now text_statistics example.");
+  });
+
+  it("タグがなければ本文をそのまま流す", async () => {
+    const events = stream([textDelta("12 × 34 = 408")] as AgentStreamEvent[]);
+    const output = [];
+    for await (const event of toSafeAgentOutput(events, { model: "gpt-oss-20b", reasoning: { enabled: true, effort: "medium" } })) output.push(event);
+    expect(output.filter((event) => event.type === "text").map((event) => event.text).join("")).toBe("12 × 34 = 408");
+  });
+});

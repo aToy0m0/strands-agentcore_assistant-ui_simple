@@ -1,6 +1,7 @@
 import type { AgentStreamEvent } from "@strands-agents/sdk";
 import type { AgentOutputEvent } from "./app.js";
 import { modelByKey, type InferenceSelection } from "../../shared/model-catalog.js";
+import { ReasoningTagSplitter } from "./reasoning-tags.js";
 
 export async function* toSafeAgentOutput(
   events: AsyncIterable<AgentStreamEvent>,
@@ -10,6 +11,7 @@ export async function* toSafeAgentOutput(
   let emittedRedactedReasoning = false;
   let emittedAnswerProgress = false;
   let reasoningBlockOpen = false;
+  const splitter = new ReasoningTagSplitter();
 
   for await (const event of events) {
     if (event.type === "beforeToolCallEvent") {
@@ -53,15 +55,33 @@ export async function* toSafeAgentOutput(
       continue;
     }
     if (modelEvent.delta.type !== "textDelta" || !modelEvent.delta.text) continue;
-    if (reasoningBlockOpen) {
-      reasoningBlockOpen = false;
-      yield { type: "reasoning-end" };
+    for (const segment of splitter.push(modelEvent.delta.text)) {
+      if (segment.channel === "reasoning") {
+        reasoningBlockOpen = true;
+        if (visibility !== "redacted") yield { type: "reasoning", text: segment.text };
+        else if (!emittedRedactedReasoning) {
+          emittedRedactedReasoning = true;
+          yield { type: "reasoning", text: "内容を考えています。\n" };
+        }
+        continue;
+      }
+      if (reasoningBlockOpen) {
+        reasoningBlockOpen = false;
+        yield { type: "reasoning-end" };
+      }
+      if (!emittedAnswerProgress) {
+        emittedAnswerProgress = true;
+        yield { type: "reasoning", text: "回答を作成しています。\n" };
+      }
+      yield { type: "text", text: segment.text };
     }
-    if (!emittedAnswerProgress) {
-      emittedAnswerProgress = true;
-      yield { type: "reasoning", text: "回答を作成しています。\n" };
+  }
+  for (const segment of splitter.flush()) {
+    if (segment.channel === "reasoning") {
+      if (visibility !== "redacted") yield { type: "reasoning", text: segment.text };
+      continue;
     }
-    yield { type: "text", text: modelEvent.delta.text };
+    yield { type: "text", text: segment.text };
   }
   if (reasoningBlockOpen) yield { type: "reasoning-end" };
 }

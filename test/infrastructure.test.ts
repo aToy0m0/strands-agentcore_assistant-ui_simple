@@ -10,6 +10,16 @@ function template(context: Record<string, unknown> = {}) {
   }));
 }
 
+function entraContext() {
+  return {
+    cognitoDomainPrefix: "workmate12-entra-test",
+    entraEnabled: true,
+    entraTenantId: "00000000-0000-0000-0000-000000000001",
+    entraClientId: "00000000-0000-0000-0000-000000000002",
+    entraClientSecretName: "workmate12/entra/client-secret",
+  };
+}
+
 describe("WorkmateCodeZipStack", () => {
   it("Cognito認証・静的Web・CodeZip Runtimeだけを構築する", () => {
     const value = template({ cognitoDomainPrefix: "workmate12-test" });
@@ -63,14 +73,28 @@ describe("WorkmateCodeZipStack", () => {
       .toThrow("loginMethods must be one of");
   });
 
-  it("loginMethodsが正しければsynthできる", () => {
-    expect(() => template({
-      cognitoDomainPrefix: "workmate12-entra-test",
-      entraEnabled: true,
-      entraTenantId: "00000000-0000-0000-0000-000000000001",
-      entraClientId: "00000000-0000-0000-0000-000000000002",
-      entraClientSecretName: "workmate12/entra/client-secret",
-      loginMethods: "entra",
-    })).not.toThrow();
+  it("loginMethods=entraならApp Client側でもCognitoログインを塞ぐ", () => {
+    const value = template({ ...entraContext(), loginMethods: "entra" });
+    value.hasResourceProperties("AWS::Cognito::UserPoolClient", Match.objectLike({
+      SupportedIdentityProviders: ["MicrosoftEntraID"],
+      // 空にするとExplicitAuthFlowsが消えCognitoの既定（SRP等）が復活するため、明示が必要
+      ExplicitAuthFlows: ["ALLOW_REFRESH_TOKEN_AUTH"],
+    }));
+  });
+
+  it("loginMethods=cognitoならEntraをApp Clientから外す", () => {
+    const value = template({ ...entraContext(), loginMethods: "cognito" });
+    value.hasResourceProperties("AWS::Cognito::UserPoolClient", Match.objectLike({
+      SupportedIdentityProviders: ["COGNITO"],
+      ExplicitAuthFlows: ["ALLOW_USER_SRP_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"],
+    }));
+  });
+
+  it("両方表示なら両方を許可し、USER_PASSWORD_AUTHは許可しない", () => {
+    const value = template({ ...entraContext(), loginMethods: "cognito-and-entra" });
+    value.hasResourceProperties("AWS::Cognito::UserPoolClient", Match.objectLike({
+      SupportedIdentityProviders: ["COGNITO", "MicrosoftEntraID"],
+      ExplicitAuthFlows: Match.not(Match.arrayWith(["ALLOW_USER_PASSWORD_AUTH"])),
+    }));
   });
 });

@@ -6,6 +6,7 @@ import { AllowedMethods, CachePolicy, Distribution, PriceClass, ViewerProtocolPo
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import {
   AccountRecovery,
+  CfnUserPoolClient,
   CfnUserPoolIdentityProvider,
   OAuthScope,
   UserPool,
@@ -16,7 +17,7 @@ import { BlockPublicAccess, Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3"
 import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
 import { MODEL_CATALOG } from "../shared/model-catalog.js";
-import { resolveLoginMethods } from "../shared/login-methods.js";
+import { resolveLoginMethods, showsCognitoLogin, showsEntraLogin } from "../shared/login-methods.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const entraProviderName = "MicrosoftEntraID";
@@ -107,12 +108,17 @@ export class WorkmateCodeZipStack extends Stack {
       });
     }
 
-    const supportedIdentityProviders = [UserPoolClientIdentityProvider.COGNITO];
-    if (entraEnabled) supportedIdentityProviders.push(UserPoolClientIdentityProvider.custom(entraProviderName));
+    // 画面に出さない認証手段はApp Client側でも塞ぐ。UIを迂回した直接のInitiateAuthやHosted UIも拒否させる。
+    const allowsCognitoSignIn = showsCognitoLogin(loginMethods);
+    const allowsEntraSignIn = entraEnabled && showsEntraLogin(loginMethods);
+    const supportedIdentityProviders = [];
+    if (allowsCognitoSignIn) supportedIdentityProviders.push(UserPoolClientIdentityProvider.COGNITO);
+    if (allowsEntraSignIn) supportedIdentityProviders.push(UserPoolClientIdentityProvider.custom(entraProviderName));
     const userPoolClient = userPool.addClient("WebClient", {
       userPoolClientName: "workmate-codezip-web",
       generateSecret: false,
-      authFlows: { userPassword: true, userSrp: true },
+      // userPasswordは総当たりに使いやすいため、Cognitoログインを見せる場合もSRPだけに限定する。
+      authFlows: allowsCognitoSignIn ? { userSrp: true } : {},
       supportedIdentityProviders,
       preventUserExistenceErrors: true,
       accessTokenValidity: Duration.hours(1),
@@ -126,6 +132,12 @@ export class WorkmateCodeZipStack extends Stack {
       },
     });
     if (entraProvider) userPoolClient.node.addDependency(entraProvider);
+    if (!allowsCognitoSignIn) {
+      // authFlowsを空にするとExplicitAuthFlowsがテンプレートから消え、Cognitoの既定（SRPを含む）が適用される。
+      // それではUIを迂回したInitiateAuthを塞げないため、更新に必要な最小の1つだけを明示する。
+      const cfnUserPoolClient = userPoolClient.node.defaultChild as CfnUserPoolClient;
+      cfnUserPoolClient.explicitAuthFlows = ["ALLOW_REFRESH_TOKEN_AUTH"];
+    }
 
     const artifactBucket = new Bucket(this, "RuntimeArtifacts", {
       encryption: BucketEncryption.S3_MANAGED,

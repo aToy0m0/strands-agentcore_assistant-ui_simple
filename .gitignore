@@ -12,3 +12,10 @@ coverage/
 *.pem
 .DS_Store
 *.tsbuildinfo
+
+# docは作業記録の置き場で公開対象外。構成図とデプロイ手順書だけ例外的に管理する。
+doc/*
+!doc/deployment-guide.md
+!doc/images/
+doc/images/*
+!doc/images/architecture.png
