@@ -41,6 +41,10 @@ export function createApp(streamAgent: StreamAgent) {
     let reasoningContextId: string | undefined;
     let reasoningMessageId: string | undefined;
     let textMessageId: string | undefined;
+    // AG-UIクライアントはmessageIdごとにテキストパートを1つ保持し、同じIDのdeltaは既存パートへ追記する。
+    // 全テキストで1つのIDを使い回すと、ツール実行後の本文が先頭のパートへ吸収され、
+    // 間に挟まるツールや思考が末尾へ押し出される。区間ごとに新しいIDを振って表示順を保つ。
+    let lastTextMessageId: string | undefined;
     const assistantMessageId = crypto.randomUUID();
     const closeReasoning = () => {
       if (!reasoningContextId || !reasoningMessageId) return;
@@ -80,7 +84,8 @@ export function createApp(streamAgent: StreamAgent) {
         if (event.type === "tool-start") {
           closeReasoning();
           closeText();
-          send({ type: EventType.TOOL_CALL_START, toolCallId: event.id, toolCallName: event.name, parentMessageId: assistantMessageId });
+          // 直前のテキスト区間を親にすると、クライアントはそのテキストの直後へツールを差し込む。
+          send({ type: EventType.TOOL_CALL_START, toolCallId: event.id, toolCallName: event.name, parentMessageId: lastTextMessageId ?? assistantMessageId });
           send({ type: EventType.TOOL_CALL_ARGS, toolCallId: event.id, delta: JSON.stringify(event.input) });
           send({ type: EventType.TOOL_CALL_END, toolCallId: event.id });
           continue;
@@ -101,7 +106,8 @@ export function createApp(streamAgent: StreamAgent) {
 
         closeReasoning();
         if (!textMessageId) {
-          textMessageId = assistantMessageId;
+          textMessageId = lastTextMessageId === undefined ? assistantMessageId : crypto.randomUUID();
+          lastTextMessageId = textMessageId;
           send({ type: EventType.TEXT_MESSAGE_START, messageId: textMessageId, role: "assistant" });
         }
         hasText = true;

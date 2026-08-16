@@ -23,27 +23,16 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module Microsoft.Graph.Authentication -MinimumVersion 2.0
+. (Join-Path $PSScriptRoot 'EntraGraphSession.ps1')
 
 $currentRedirectUri = "https://$CurrentCognitoUserPoolDomainHost/oauth2/idpresponse"
 $newRedirectUri = "https://$NewCognitoUserPoolDomainHost/oauth2/idpresponse"
-$connectParameters = @{
-    TenantId     = $TenantId
-    Scopes       = 'Application.ReadWrite.All'
-    ContextScope = 'Process'
-    NoWelcome    = $true
-}
-if ($UseDeviceCode) {
-    $connectParameters.UseDeviceCode = $true
-}
-
-Connect-MgGraph @connectParameters
+$ownsConnection = Connect-EntraGraphSession `
+    -TenantId $TenantId `
+    -RequiredScopes @('Application.ReadWrite.All') `
+    -UseDeviceCode:$UseDeviceCode
 
 try {
-    $context = Get-MgContext
-    if ($null -eq $context -or $context.TenantId -ne $TenantId) {
-        throw "Microsoft Graph tenant mismatch. Expected=$TenantId, Actual=$($context.TenantId)"
-    }
-
     $applicationUri = "https://graph.microsoft.com/v1.0/applications(appId='$ApplicationClientId')?`$select=id,appId,displayName,web"
     $application = Invoke-MgGraphRequest -Method GET -Uri $applicationUri
     $redirectUris = @($application.web.redirectUris)
@@ -82,5 +71,5 @@ try {
     }
 }
 finally {
-    Disconnect-MgGraph | Out-Null
+    Disconnect-EntraGraphSession -OwnsConnection $ownsConnection
 }

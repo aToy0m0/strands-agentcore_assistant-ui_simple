@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { fetchUserAttributes, signOut } from "aws-amplify/auth";
+import { fetchAuthSession, signOut } from "aws-amplify/auth";
 import { useTheme } from "next-themes";
 import { LogOut, Maximize2, Menu, Minimize2, Settings, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import type { RuntimeConfig } from "@/config";
 import { agent } from "@/lib/agents";
+import { userViewFromIdTokenClaims } from "@/lib/current-user";
 import { cn } from "@/lib/utils";
 import { AgUiRuntimeProvider } from "./runtime/ag-ui-runtime-provider";
 import { ChatThread } from "./chat-thread";
@@ -26,8 +27,18 @@ export function Workspace({ config, onSignedOut }: { config: RuntimeConfig; onSi
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const selectedProject = projects.find((project) => project.id === selectedProjectId);
 
+  async function signOutOfWorkspace() {
+    try {
+      await signOut();
+      setSettingsOpen(false);
+      onSignedOut();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : "ログアウトに失敗しました");
+    }
+  }
+
   useEffect(() => {
-    void fetchUserAttributes().then((attributes) => setCurrentUser({ id: attributes.sub ?? "cognito-user", tenantId: "cognito", displayName: attributes.name ?? attributes.email ?? "Cognito User", roles: [] })).catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : "ユーザー情報を取得できませんでした"));
+    void fetchAuthSession().then((session) => setCurrentUser(userViewFromIdTokenClaims(session.tokens?.idToken?.payload))).catch((cause: unknown) => toast.error(cause instanceof Error ? cause.message : "ユーザー情報を取得できませんでした"));
     const feedback = () => toast.success("フィードバックはこの簡易構成では保存されません");
     const runtimeError = (event: Event) => toast.error(`AG-UIエラー: ${(event as CustomEvent<string>).detail}`);
     window.addEventListener("workmate-feedback", feedback);
@@ -49,6 +60,7 @@ export function Workspace({ config, onSignedOut }: { config: RuntimeConfig; onSi
             projects={projects} onProjectsChange={setProjects}
             selectedProjectId={selectedProjectId} onSelectedProjectChange={setSelectedProjectId}
             currentUser={currentUser}
+            onSignOut={() => void signOutOfWorkspace()}
           />
         </div>
         <main className="relative flex min-w-0 flex-1 flex-col">
@@ -59,25 +71,16 @@ export function Workspace({ config, onSignedOut }: { config: RuntimeConfig; onSi
           </header>
           <ChatThread agent={agent} selectedProject={selectedProject} onClearSelectedProject={() => setSelectedProjectId(undefined)} />
         </main>
-        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onSignedOut={onSignedOut} />
+        <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} config={config} onSignOut={() => void signOutOfWorkspace()} />
         <Toaster sidebarWidth={immersive ? 0 : sidebarOpen ? 238 : 48} />
       </div>
     </AgUiRuntimeProvider>
   );
 }
 
-function SettingsDialog({ open, onOpenChange, config, onSignedOut }: { open: boolean; onOpenChange: (open: boolean) => void; config: RuntimeConfig; onSignedOut: () => void }) {
+function SettingsDialog({ open, onOpenChange, config, onSignOut }: { open: boolean; onOpenChange: (open: boolean) => void; config: RuntimeConfig; onSignOut: () => void }) {
   const { theme, setTheme } = useTheme();
-  async function logout() {
-    try {
-      await signOut();
-      onOpenChange(false);
-      onSignedOut();
-    } catch (cause) {
-      toast.error(cause instanceof Error ? cause.message : "ログアウトに失敗しました");
-    }
-  }
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="min-h-[500px] overflow-hidden p-0"><header className="border-b px-6 py-5"><p className="text-[10px] font-semibold uppercase tracking-widest text-agent">Workspace</p><DialogTitle className="text-xl font-semibold">設定</DialogTitle><DialogDescription className="sr-only">外観とAgentCore接続設定</DialogDescription></header><Tabs defaultValue="general" orientation="vertical" className="grid min-h-[420px] grid-cols-[160px_1fr] max-sm:grid-cols-1"><TabsList className="flex flex-col gap-1 border-r bg-muted/40 p-3 max-sm:flex-row max-sm:border-b max-sm:border-r-0"><TabsTrigger value="general"><UserRound className="size-4" />一般</TabsTrigger><TabsTrigger value="connection"><Settings className="size-4" />接続</TabsTrigger></TabsList><div className="p-6"><TabsContent value="general" className="space-y-6"><div className="flex items-center justify-between gap-4"><span><strong className="block text-sm">外観</strong><small className="text-xs text-muted-foreground">アプリ全体のカラーテーマ</small></span><Select value={theme ?? "system"} onValueChange={setTheme}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="system">システム</SelectItem><SelectItem value="light">ライト</SelectItem><SelectItem value="dark">ダーク</SelectItem></SelectContent></Select></div><div className="flex items-center justify-between gap-4 border-t pt-5"><span><strong className="block text-sm">セッション</strong><small className="text-xs text-muted-foreground">Cognitoの認証セッションを終了</small></span><Button type="button" variant="outline" onClick={() => void logout()}><LogOut className="size-4" />ログアウト</Button></div></TabsContent><TabsContent value="connection" className="space-y-5"><div className="rounded-xl border bg-card p-4"><strong className="text-sm">{agent.name}</strong><p className="mt-1 text-xs text-muted-foreground">{agent.description}</p></div><div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1"><ConnectionField id="runtime-id" label="Runtime" value="Browser direct / CodeZip" /><ConnectionField id="session-id" label="Session ID" value="一時的なconversation UUID" /><ConnectionField id="transport" label="Transport" value="AG-UI over SSE" /><ConnectionField id="auth" label="Authentication" value={config.auth.entraEnabled ? "Cognito + Entra ID" : "Cognito"} /></div><p className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">BFFとデータベースはありません。チャット、プロジェクト、フィードバックは再読み込み後に保持されません。</p></TabsContent></div></Tabs></DialogContent></Dialog>;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="min-h-[500px] overflow-hidden p-0"><header className="border-b px-6 py-5"><p className="text-[10px] font-semibold uppercase tracking-widest text-agent">Workspace</p><DialogTitle className="text-xl font-semibold">設定</DialogTitle><DialogDescription className="sr-only">外観とAgentCore接続設定</DialogDescription></header><Tabs defaultValue="general" orientation="vertical" className="grid min-h-[420px] grid-cols-[160px_1fr] max-sm:grid-cols-1"><TabsList className="flex flex-col gap-1 border-r bg-muted/40 p-3 max-sm:flex-row max-sm:border-b max-sm:border-r-0"><TabsTrigger value="general"><UserRound className="size-4" />一般</TabsTrigger><TabsTrigger value="connection"><Settings className="size-4" />接続</TabsTrigger></TabsList><div className="p-6"><TabsContent value="general" className="space-y-6"><div className="flex items-center justify-between gap-4"><span><strong className="block text-sm">外観</strong><small className="text-xs text-muted-foreground">アプリ全体のカラーテーマ</small></span><Select value={theme ?? "system"} onValueChange={setTheme}><SelectTrigger className="w-28"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="system">システム</SelectItem><SelectItem value="light">ライト</SelectItem><SelectItem value="dark">ダーク</SelectItem></SelectContent></Select></div><div className="flex items-center justify-between gap-4 border-t pt-5"><span><strong className="block text-sm">セッション</strong><small className="text-xs text-muted-foreground">Cognitoの認証セッションを終了</small></span><Button type="button" variant="outline" onClick={onSignOut}><LogOut className="size-4" />ログアウト</Button></div></TabsContent><TabsContent value="connection" className="space-y-5"><div className="rounded-xl border bg-card p-4"><strong className="text-sm">{agent.name}</strong><p className="mt-1 text-xs text-muted-foreground">{agent.description}</p></div><div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1"><ConnectionField id="runtime-id" label="Runtime" value="Browser direct / CodeZip" /><ConnectionField id="session-id" label="Session ID" value="一時的なconversation UUID" /><ConnectionField id="transport" label="Transport" value="AG-UI over SSE" /><ConnectionField id="auth" label="Authentication" value={config.auth.entraEnabled ? "Cognito + Entra ID" : "Cognito"} /></div><p className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">BFFとデータベースはありません。チャット、プロジェクト、フィードバックは再読み込み後に保持されません。</p></TabsContent></div></Tabs></DialogContent></Dialog>;
 }
 
 function ConnectionField({ id, label, value }: { id: string; label: string; value: string }) {

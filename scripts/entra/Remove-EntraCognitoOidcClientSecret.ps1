@@ -18,17 +18,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module Microsoft.Graph.Authentication -MinimumVersion 2.0
+. (Join-Path $PSScriptRoot 'EntraGraphSession.ps1')
 
-$connectParameters = @{
-    TenantId     = $TenantId
-    Scopes       = 'Application.ReadWrite.All'
-    ContextScope = 'Process'
-    NoWelcome    = $true
-}
-if ($UseDeviceCode) {
-    $connectParameters.UseDeviceCode = $true
-}
-Connect-MgGraph @connectParameters
+$ownsConnection = Connect-EntraGraphSession `
+    -TenantId $TenantId `
+    -RequiredScopes @('Application.ReadWrite.All') `
+    -UseDeviceCode:$UseDeviceCode
 
 try {
     $application = Invoke-MgGraphRequest `
@@ -66,5 +61,5 @@ try {
     }
 }
 finally {
-    Disconnect-MgGraph | Out-Null
+    Disconnect-EntraGraphSession -OwnsConnection $ownsConnection
 }

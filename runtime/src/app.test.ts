@@ -126,7 +126,28 @@ describe("AgentCore HTTP contract", () => {
       .map((event) => event.messageId);
     expect(new Set(reasoningIds).size).toBe(reasoningIds.length);
     const textIds = events.filter((event) => event.type === EventType.TEXT_MESSAGE_START).map((event) => event.messageId);
-    expect(new Set(textIds).size).toBe(1);
+    expect(new Set(textIds).size).toBe(textIds.length);
+  });
+
+  it("keeps tool calls between the text sections that surround them", async () => {
+    const response = await request(createApp(async function* () {
+      yield { type: "text" as const, text: "3つ同時に動かしてみます！" };
+      yield { type: "tool-start" as const, id: "tool-1", name: "calculator", input: { expression: "1+2" } };
+      yield { type: "tool-result" as const, id: "tool-1", result: { value: 3 } };
+      yield { type: "text" as const, text: "結果はこちら！" };
+    }))
+      .post("/invocations")
+      .set("Accept", "text/event-stream")
+      .send(input)
+      .expect(200);
+
+    const events = eventsFrom(response.text);
+    const textStarts = events.filter((event) => event.type === EventType.TEXT_MESSAGE_START);
+    expect(textStarts).toHaveLength(2);
+    expect(textStarts[0]?.messageId).not.toBe(textStarts[1]?.messageId);
+    // 先行するテキストを親にすることで、クライアントはそのテキストの直後へツールを挿入する。
+    expect(events.find((event) => event.type === EventType.TOOL_CALL_START)?.parentMessageId)
+      .toBe(textStarts[0]?.messageId);
   });
 
   it("emits separate AG-UI reasoning messages for consecutive reasoning blocks", async () => {

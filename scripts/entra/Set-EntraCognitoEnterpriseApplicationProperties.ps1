@@ -15,25 +15,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Import-Module Microsoft.Graph.Authentication -MinimumVersion 2.0
+. (Join-Path $PSScriptRoot 'EntraGraphSession.ps1')
 
-$connectParameters = @{
-    TenantId     = $TenantId
-    Scopes       = 'Application.ReadWrite.All'
-    ContextScope = 'Process'
-    NoWelcome    = $true
-}
-if ($UseDeviceCode) {
-    $connectParameters.UseDeviceCode = $true
-}
-
-Connect-MgGraph @connectParameters
+$ownsConnection = Connect-EntraGraphSession `
+    -TenantId $TenantId `
+    -RequiredScopes @('Application.ReadWrite.All') `
+    -UseDeviceCode:$UseDeviceCode
 
 try {
-    $context = Get-MgContext
-    if ($null -eq $context -or $context.TenantId -ne $TenantId) {
-        throw "Microsoft Graph tenant mismatch. Expected=$TenantId, Actual=$($context.TenantId)"
-    }
-
     $filter = [Uri]::EscapeDataString("appId eq '$ApplicationClientId'")
     $collectionUri = "https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=$filter&`$select=id,appId,displayName,accountEnabled,appRoleAssignmentRequired,tags"
     $response = Invoke-MgGraphRequest -Method GET -Uri $collectionUri
@@ -100,5 +89,5 @@ try {
     }
 }
 finally {
-    Disconnect-MgGraph | Out-Null
+    Disconnect-EntraGraphSession -OwnsConnection $ownsConnection
 }

@@ -16,7 +16,7 @@ import {
   useAuiState,
 } from "@assistant-ui/react";
 import {
-  ArrowDown, ArrowUp, AudioWaveform, Brain, ChevronDown, ChevronLeft, ChevronRight,
+  ArrowDown, ArrowUp, AudioWaveform, ChevronDown, ChevronLeft, ChevronRight,
   Camera, Copy, File as FileIcon, FileUp, FolderKanban, Image as ImageIcon, Pencil, Plus,
   Check, LoaderCircle, Square, ThumbsDown, ThumbsUp, X,
 } from "lucide-react";
@@ -311,13 +311,22 @@ function BranchPicker() {
   );
 }
 
+/** 回答が完了した時点で思考の折りたたみを閉じる。完了後に利用者が開き直した場合は開いたままにする。 */
+function useCollapseOnMessageComplete(setOpen: (open: boolean) => void) {
+  const messageRunning = useAuiState((state) => state.message.status?.type === "running");
+  useEffect(() => {
+    if (!messageRunning) setOpen(false);
+  }, [messageRunning, setOpen]);
+}
+
 function ThinkingAccordion({ running, children }: { running: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(running);
+  useCollapseOnMessageComplete(setOpen);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="my-3 overflow-hidden rounded-xl border bg-muted/30" data-testid="thinking-accordion">
       <CollapsibleTrigger className="group flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
-        {running ? <LoaderCircle className="size-4 animate-spin text-agent motion-reduce:animate-none" aria-hidden="true" /> : <Brain className="size-4 text-agent" aria-hidden="true" />}
+        {running && <LoaderCircle className="size-4 animate-spin text-agent motion-reduce:animate-none" aria-hidden="true" />}
         <span>{running ? "処理中" : "処理の概要"}</span>
         <ChevronDown className="ml-auto size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" aria-hidden="true" />
       </CollapsibleTrigger>
@@ -334,11 +343,12 @@ function Reasoning({ text }: { text: string }) {
 
 function ReasoningCard({ text, running }: { text: string; running: boolean }) {
   const [open, setOpen] = useState(running);
+  useCollapseOnMessageComplete(setOpen);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="my-1" data-testid="reasoning-card">
       <CollapsibleTrigger className="group flex min-h-8 w-full items-center gap-2 rounded-md px-1 text-left text-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        {running ? <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Brain className="size-3.5 text-agent" aria-hidden="true" />}
+        {running && <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
         <span>内容を考えています。</span>
         <ChevronDown className="size-3.5 transition-transform group-data-[state=open]:rotate-180" aria-hidden="true" />
       </CollapsibleTrigger>

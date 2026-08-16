@@ -9,6 +9,7 @@ import {
   type ReactNode,
   type SetStateAction,
 } from "react";
+import type { UserView } from "@/lib/current-user";
 import {
   ThreadListItemPrimitive,
   ThreadListPrimitive,
@@ -30,9 +31,9 @@ import {
   Globe2,
   GraduationCap,
   Heart,
+  LogOut,
   MessageCircle,
   MessageSquare,
-  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -111,14 +112,10 @@ type SidebarProps = {
   selectedProjectId?: string;
   onSelectedProjectChange: (projectId?: string) => void;
   currentUser?: UserView;
+  onSignOut: () => void;
 };
 
-export type UserView = {
-  id: string;
-  tenantId: string;
-  displayName: string;
-  roles: string[];
-};
+export type { UserView };
 
 const projectIcons = [
   { id: "folder", label: "フォルダー", icon: FolderKanban },
@@ -355,6 +352,7 @@ export function ConversationSidebar(props: SidebarProps) {
                 compact
                 currentUser={props.currentUser}
                 onOpenSettings={props.onOpenSettings}
+                onSignOut={props.onSignOut}
               />
             </div>
           </TooltipProvider>
@@ -728,6 +726,7 @@ export function ConversationSidebar(props: SidebarProps) {
             <UserMenu
               currentUser={props.currentUser}
               onOpenSettings={props.onOpenSettings}
+              onSignOut={props.onSignOut}
             />
           </div>
         )}
@@ -1283,10 +1282,12 @@ function UserMenu({
   compact = false,
   currentUser,
   onOpenSettings,
+  onSignOut,
 }: {
   compact?: boolean;
   currentUser?: UserView;
   onOpenSettings: () => void;
+  onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const displayName = currentUser?.displayName ?? "ユーザー情報を取得中";
@@ -1312,6 +1313,7 @@ function UserMenu({
           displayName={displayName}
           roleLabel={roleLabel}
           onOpenSettings={onOpenSettings}
+          onSignOut={onSignOut}
           onClose={() => setOpen(false)}
           align="start"
         />
@@ -1344,6 +1346,7 @@ function UserMenu({
           displayName={displayName}
           roleLabel={roleLabel}
           onOpenSettings={onOpenSettings}
+          onSignOut={onSignOut}
           onClose={() => setOpen(false)}
           align="center"
         />
@@ -1365,12 +1368,14 @@ function UserMenuContent({
   displayName,
   roleLabel,
   onOpenSettings,
+  onSignOut,
   onClose,
   align,
 }: {
   displayName: string;
   roleLabel: string;
   onOpenSettings: () => void;
+  onSignOut: () => void;
   onClose: () => void;
   align: "start" | "center";
 }) {
@@ -1390,9 +1395,14 @@ function UserMenuContent({
         <Settings className="size-4" />
         設定を開く
       </DropdownMenuItem>
-      <DropdownMenuItem disabled>
-        <Moon className="size-4" />
-        テーマは設定画面で変更
+      <DropdownMenuItem
+        onSelect={() => {
+          onClose();
+          window.setTimeout(onSignOut, 0);
+        }}
+      >
+        <LogOut className="size-4" />
+        ログアウト
       </DropdownMenuItem>
     </DropdownMenuContent>
   );
