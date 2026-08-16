@@ -15,12 +15,47 @@ import {
 import { Effect, PolicyStatement, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { BlockPublicAccess, Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
 import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
+import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
+import { LoggingDestination, LogType, configureLoggingDelivery } from "aws-cdk-lib/aws-bedrockagentcore";
 import type { Construct } from "constructs";
 import { MODEL_CATALOG } from "../shared/model-catalog.js";
 import { resolveLoginMethods, showsCognitoLogin, showsEntraLogin } from "../shared/login-methods.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const entraProviderName = "MicrosoftEntraID";
+
+/** CloudWatch Logsが受け付ける保持日数。ここにない値はCloudFormationが拒否する。 */
+const RETENTION_BY_DAYS = new Map<number, RetentionDays>(
+  Object.entries(RetentionDays)
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    .map(([, days]) => [days, days as RetentionDays]),
+);
+
+export function resolveLogRetention(configured: unknown): RetentionDays {
+  if (configured === undefined || configured === null) return RetentionDays.THREE_DAYS;
+  const days = typeof configured === "number" ? configured : Number(configured);
+  const retention = Number.isInteger(days) ? RETENTION_BY_DAYS.get(days) : undefined;
+  if (retention === undefined) {
+    throw new Error(`logRetentionDays must be one of: ${[...RETENTION_BY_DAYS.keys()].sort((a, b) => a - b).join(", ")}`);
+  }
+  return retention;
+}
+
+/** 種別ごとのログをデプロイ時に無効化できるようにする。既定は有効。 */
+export function runtimeLogSettings(scope: Construct): Record<string, string> {
+  const categories = { request: "RUNTIME_LOG_REQUEST", model: "RUNTIME_LOG_MODEL", tool: "RUNTIME_LOG_TOOL" } as const;
+  const settings: Record<string, string> = {};
+  for (const [category, variable] of Object.entries(categories)) {
+    const configured = scope.node.tryGetContext(`runtimeLog${category.charAt(0).toUpperCase()}${category.slice(1)}`);
+    if (configured === undefined) continue;
+    const value = String(configured).trim().toLowerCase();
+    if (!["on", "off", "true", "false"].includes(value)) {
+      throw new Error(`runtimeLog${category.charAt(0).toUpperCase()}${category.slice(1)} must be on or off`);
+    }
+    settings[variable] = value === "on" || value === "true" ? "on" : "off";
+  }
+  return settings;
+}
 
 function contextString(scope: Construct, name: string): string {
   const value = scope.node.tryGetContext(name);
@@ -40,6 +75,8 @@ export class WorkmateCodeZipStack extends Stack {
       throw new Error("cognitoDomainPrefix must contain only lowercase letters, numbers, and hyphens");
     }
     const domainPrefix = typeof configuredDomainPrefix === "string" ? configuredDomainPrefix : `workmate12-${this.account}`;
+    const logRetention = resolveLogRetention(this.node.tryGetContext("logRetentionDays"));
+    const runtimeLogEnvironment = runtimeLogSettings(this);
 
     const webBucket = new Bucket(this, "WebAssets", {
       encryption: BucketEncryption.S3_MANAGED,
@@ -166,6 +203,17 @@ export class WorkmateCodeZipStack extends Stack {
         ]
         : model.foundationModelIds.map((foundationModelId) => `arn:${this.partition}:bedrock:${this.region}::foundation-model/${foundationModelId}`)),
     }));
+    // AgentCore Runtimeが自身のロググループへ書けるようにする。これがないとログが1行も残らない。
+    runtimeRole.addToPolicy(new PolicyStatement({
+      effect: Effect.ALLOW,
+      actions: ["logs:CreateLogGroup", "logs:DescribeLogGroups"],
+      resources: [`arn:${this.partition}:logs:${this.region}:${this.account}:log-group:*`],
+    }));
+    runtimeRole.addToPolicy(new PolicyStatement({
+      effect: Effect.ALLOW,
+      actions: ["logs:DescribeLogStreams", "logs:CreateLogStream", "logs:PutLogEvents"],
+      resources: [`arn:${this.partition}:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`],
+    }));
     artifactBucket.grantRead(runtimeRole);
     const agentRuntime = new CfnRuntime(this, "AgentRuntime", {
       agentRuntimeName: "workmate_codezip_direct",
@@ -181,9 +229,19 @@ export class WorkmateCodeZipStack extends Stack {
       networkConfiguration: { networkMode: "PUBLIC" },
       lifecycleConfiguration: { idleRuntimeSessionTimeout: 300, maxLifetime: 1800 },
       protocolConfiguration: "AGUI",
-      environmentVariables: { AWS_REGION: this.region },
+      environmentVariables: { AWS_REGION: this.region, ...runtimeLogEnvironment },
     });
     agentRuntime.node.addDependency(runtimeUpload);
+
+    // 保持期間を制御するため、サービス任せにせずこちらでロググループを持つ。
+    const runtimeLogGroup = new LogGroup(this, "RuntimeLogs", {
+      retention: logRetention,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    configureLoggingDelivery(this, agentRuntime.attrAgentRuntimeArn, [
+      { logType: LogType.APPLICATION_LOGS, destination: LoggingDestination.cloudWatchLogs(runtimeLogGroup) },
+      { logType: LogType.USAGE_LOGS, destination: LoggingDestination.cloudWatchLogs(runtimeLogGroup) },
+    ]);
 
     const webDeployment = new BucketDeployment(this, "WebDeployment", {
       destinationBucket: webBucket,
@@ -216,5 +274,6 @@ export class WorkmateCodeZipStack extends Stack {
     new CfnOutput(this, "EntraRedirectUri", { value: `https://${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com/oauth2/idpresponse` });
     new CfnOutput(this, "AgentRuntimeArn", { value: agentRuntime.attrAgentRuntimeArn });
     new CfnOutput(this, "RuntimeArtifactsBucketName", { value: artifactBucket.bucketName });
+    new CfnOutput(this, "RuntimeLogGroupName", { value: runtimeLogGroup.logGroupName });
   }
 }

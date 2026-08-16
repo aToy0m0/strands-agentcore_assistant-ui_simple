@@ -1,6 +1,7 @@
 import { EventType, RunAgentInputSchema, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import { EventEncoder } from "@ag-ui/encoder";
 import express, { type ErrorRequestHandler } from "express";
+import { createRuntimeLogger, parseLogSettings, type RuntimeLogger } from "./logging.js";
 
 export type AgentOutputEvent =
   | { type: "reasoning"; text: string }
@@ -20,13 +21,17 @@ export function promptFrom(input: RunAgentInput): string {
   return prompt;
 }
 
-export function createApp(streamAgent: StreamAgent) {
+export function createApp(streamAgent: StreamAgent, logger: RuntimeLogger = createRuntimeLogger(parseLogSettings(process.env))) {
   const app = express();
   app.get("/ping", (_request, response) => response.json({ status: "Healthy" }));
   app.post("/invocations", express.json({ limit: "4mb" }), async (request, response) => {
     const parsed = RunAgentInputSchema.safeParse(request.body);
-    if (!parsed.success) return response.status(400).json({ error: "Invalid AG-UI RunAgentInput", issues: parsed.error.issues });
+    if (!parsed.success) {
+      logger.error("invocation.rejected", { reason: "invalid AG-UI RunAgentInput", issues: parsed.error.issues });
+      return response.status(400).json({ error: "Invalid AG-UI RunAgentInput", issues: parsed.error.issues });
+    }
     const input = parsed.data;
+    logger.log("request", "invocation.received", { threadId: input.threadId, runId: input.runId, messageCount: input.messages.length, messages: input.messages });
     const eventEncoder = new EventEncoder({ accept: request.headers.accept ?? "text/event-stream" });
     response.status(200);
     response.setHeader("Content-Type", eventEncoder.getContentType());
@@ -61,6 +66,9 @@ export function createApp(streamAgent: StreamAgent) {
     try {
       send({ type: EventType.RUN_STARTED, threadId: input.threadId, runId: input.runId });
       let hasText = false;
+      const startedAt = Date.now();
+      let assistantText = "";
+      let reasoningLength = 0;
 
       for await (const event of streamAgent(input, cancellation.signal)) {
         if (response.destroyed || response.writableEnded) return;
@@ -77,6 +85,7 @@ export function createApp(streamAgent: StreamAgent) {
             send({ type: EventType.REASONING_START, messageId: reasoningContextId });
             send({ type: EventType.REASONING_MESSAGE_START, messageId: reasoningMessageId, role: "reasoning" });
           }
+          reasoningLength += event.text.length;
           send({ type: EventType.REASONING_MESSAGE_CONTENT, messageId: reasoningMessageId, delta: event.text });
           continue;
         }
@@ -85,6 +94,7 @@ export function createApp(streamAgent: StreamAgent) {
           closeReasoning();
           closeText();
           // 直前のテキスト区間を親にすると、クライアントはそのテキストの直後へツールを差し込む。
+          logger.log("tool", "tool.started", { threadId: input.threadId, toolCallId: event.id, name: event.name, input: event.input });
           send({ type: EventType.TOOL_CALL_START, toolCallId: event.id, toolCallName: event.name, parentMessageId: lastTextMessageId ?? assistantMessageId });
           send({ type: EventType.TOOL_CALL_ARGS, toolCallId: event.id, delta: JSON.stringify(event.input) });
           send({ type: EventType.TOOL_CALL_END, toolCallId: event.id });
@@ -92,6 +102,7 @@ export function createApp(streamAgent: StreamAgent) {
         }
 
         if (event.type === "tool-result") {
+          logger.log("tool", "tool.completed", { threadId: input.threadId, toolCallId: event.id, result: event.result, ...(event.error ? { error: event.error } : {}) });
           closeReasoning();
           closeText();
           send({
@@ -111,18 +122,20 @@ export function createApp(streamAgent: StreamAgent) {
           send({ type: EventType.TEXT_MESSAGE_START, messageId: textMessageId, role: "assistant" });
         }
         hasText = true;
+        assistantText += event.text;
         send({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: textMessageId, delta: event.text });
       }
       if (!hasText) throw new Error("Strands returned no assistant text");
       closeReasoning();
       closeText();
+      logger.log("model", "assistant.completed", { threadId: input.threadId, runId: input.runId, elapsedMs: Date.now() - startedAt, reasoningLength, text: assistantText });
       send({ type: EventType.RUN_FINISHED, threadId: input.threadId, runId: input.runId });
       response.end();
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
       closeReasoning();
       closeText();
-      console.error("Agent invocation failed", error);
+      logger.error("invocation.failed", { threadId: input.threadId, runId: input.runId, message: error instanceof Error ? error.message : String(error), stack: error instanceof Error ? error.stack : undefined });
       send({ type: EventType.RUN_ERROR, message: "エージェントの実行に失敗しました", code: "AGENT_INVOCATION_FAILED" });
       response.end();
     }

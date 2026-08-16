@@ -1,7 +1,8 @@
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { describe, expect, it } from "vitest";
-import { WorkmateCodeZipStack } from "../infrastructure/stack.js";
+import { WorkmateCodeZipStack, resolveLogRetention } from "../infrastructure/stack.js";
+import { RetentionDays } from "aws-cdk-lib/aws-logs";
 
 function template(context: Record<string, unknown> = {}) {
   const app = new App({ context });
@@ -96,5 +97,55 @@ describe("WorkmateCodeZipStack", () => {
       SupportedIdentityProviders: ["COGNITO", "MicrosoftEntraID"],
       ExplicitAuthFlows: Match.not(Match.arrayWith(["ALLOW_USER_PASSWORD_AUTH"])),
     }));
+  });
+});
+
+describe("ログ出力", () => {
+  it("既定で保持期間3日のロググループとAPPLICATION_LOGS/USAGE_LOGSの配信を作る", () => {
+    const value = template({ cognitoDomainPrefix: "workmate12-test" });
+    value.hasResourceProperties("AWS::Logs::LogGroup", Match.objectLike({ RetentionInDays: 3 }));
+    value.resourceCountIs("AWS::Logs::Delivery", 2);
+    const sources = value.findResources("AWS::Logs::DeliverySource");
+    const logTypes = Object.values(sources).map((resource) => resource.Properties.LogType).sort();
+    expect(logTypes).toEqual(["APPLICATION_LOGS", "USAGE_LOGS"]);
+  });
+
+  it("実行ロールへCloudWatch Logsの書き込み権限を付ける", () => {
+    const value = template({ cognitoDomainPrefix: "workmate12-test" });
+    value.hasResourceProperties("AWS::IAM::Policy", Match.objectLike({
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({ Action: Match.arrayWith(["logs:CreateLogStream", "logs:PutLogEvents"]) }),
+        ]),
+      }),
+    }));
+  });
+
+  it("logRetentionDaysで保持期間を変更できる", () => {
+    template({ cognitoDomainPrefix: "workmate12-test", logRetentionDays: 30 })
+      .hasResourceProperties("AWS::Logs::LogGroup", Match.objectLike({ RetentionInDays: 30 }));
+  });
+
+  it("CloudWatch Logsが受け付けない保持期間は拒否する", () => {
+    expect(() => resolveLogRetention(4)).toThrow("logRetentionDays must be one of");
+    expect(() => resolveLogRetention("abc")).toThrow("logRetentionDays must be one of");
+    expect(resolveLogRetention(undefined)).toBe(RetentionDays.THREE_DAYS);
+  });
+
+  it("種別ごとのログをデプロイ時に無効化できる", () => {
+    template({ cognitoDomainPrefix: "workmate12-test", runtimeLogModel: "off", runtimeLogTool: "off" })
+      .hasResourceProperties("AWS::BedrockAgentCore::Runtime", Match.objectLike({
+        EnvironmentVariables: Match.objectLike({ RUNTIME_LOG_MODEL: "off", RUNTIME_LOG_TOOL: "off" }),
+      }));
+  });
+
+  it("未指定の種別は環境変数を設定せず既定の有効のままにする", () => {
+    const runtimes = template({ cognitoDomainPrefix: "workmate12-test" }).findResources("AWS::BedrockAgentCore::Runtime");
+    const environment = Object.values(runtimes)[0]?.Properties.EnvironmentVariables ?? {};
+    expect(Object.keys(environment)).toEqual(["AWS_REGION"]);
+  });
+
+  it("on/off以外の指定は拒否する", () => {
+    expect(() => template({ cognitoDomainPrefix: "workmate12-test", runtimeLogModel: "maybe" })).toThrow("must be on or off");
   });
 });
