@@ -1,13 +1,15 @@
 import { useState, type FormEvent } from "react";
 import { signIn, signInWithRedirect } from "aws-amplify/auth";
 import { Building2, LoaderCircle, LockKeyhole } from "lucide-react";
-import type { RuntimeConfig } from "@/config";
+import { showsCognitoLogin, showsEntraLogin, type RuntimeConfig } from "@/config";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
 export function LoginForm({ config, onAuthenticated }: { config: RuntimeConfig; onAuthenticated: () => void }) {
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const showsCognito = showsCognitoLogin(config);
+  const showsEntra = showsEntraLogin(config);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -38,15 +40,17 @@ export function LoginForm({ config, onAuthenticated }: { config: RuntimeConfig; 
     <main className="grid min-h-dvh place-items-center bg-[radial-gradient(circle_at_top,var(--color-accent),transparent_55%)] p-4">
       <section className="w-full max-w-sm rounded-2xl border bg-card p-6 shadow-xl shadow-black/5 sm:p-8" aria-labelledby="login-title">
         <h1 id="login-title" className="mb-7 text-xl font-semibold">ログイン</h1>
-        {config.auth.entraEnabled && (
-          <><Button type="button" variant="outline" className="h-11 w-full" onClick={() => void signInWithEntra()}><Building2 className="size-4" />Microsoftで続ける</Button><div className="my-5 flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" />または<span className="h-px flex-1 bg-border" /></div></>
+        {showsEntra && <Button type="button" variant="outline" className="h-11 w-full" onClick={() => void signInWithEntra()}><Building2 className="size-4" />Microsoftで続ける</Button>}
+        {showsEntra && showsCognito && <div className="my-5 flex items-center gap-3 text-xs text-muted-foreground"><span className="h-px flex-1 bg-border" />または<span className="h-px flex-1 bg-border" /></div>}
+        {showsCognito && (
+          <form className="space-y-5" onSubmit={submit}>
+            <div className="space-y-2"><label htmlFor="login-id" className="text-sm font-medium">メールアドレス</label><Input id="login-id" name="loginId" type="email" autoComplete="username" required maxLength={256} disabled={submitting} /></div>
+            <div className="space-y-2"><label htmlFor="password" className="text-sm font-medium">パスワード</label><Input id="password" name="password" type="password" autoComplete="current-password" required maxLength={256} disabled={submitting} /></div>
+            {error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+            <Button type="submit" className="h-11 w-full" disabled={submitting}>{submitting ? <LoaderCircle className="size-4 animate-spin" /> : <LockKeyhole className="size-4" />}{submitting ? "認証中…" : "ログイン"}</Button>
+          </form>
         )}
-        <form className="space-y-5" onSubmit={submit}>
-          <div className="space-y-2"><label htmlFor="login-id" className="text-sm font-medium">メールアドレス</label><Input id="login-id" name="loginId" type="email" autoComplete="username" required maxLength={256} disabled={submitting} /></div>
-          <div className="space-y-2"><label htmlFor="password" className="text-sm font-medium">パスワード</label><Input id="password" name="password" type="password" autoComplete="current-password" required maxLength={256} disabled={submitting} /></div>
-          {error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-          <Button type="submit" className="h-11 w-full" disabled={submitting}>{submitting ? <LoaderCircle className="size-4 animate-spin" /> : <LockKeyhole className="size-4" />}{submitting ? "認証中…" : "ログイン"}</Button>
-        </form>
+        {!showsCognito && error && <p role="alert" className="mt-5 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
       </section>
     </main>
   );

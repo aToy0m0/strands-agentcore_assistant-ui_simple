@@ -52,4 +52,25 @@ describe("WorkmateCodeZipStack", () => {
   it("Entra必須入力が欠けていればsynthを拒否する", () => {
     expect(() => template({ entraEnabled: true })).toThrow("entraTenantId");
   });
+
+  it("Entraを無効にしたままEntra表示を指定すればsynthを拒否する", () => {
+    expect(() => template({ cognitoDomainPrefix: "workmate12-test", loginMethods: "entra" }))
+      .toThrow("requires entraEnabled=true");
+  });
+
+  it("未知のloginMethodsはsynthを拒否する", () => {
+    expect(() => template({ cognitoDomainPrefix: "workmate12-test", loginMethods: "saml" }))
+      .toThrow("loginMethods must be one of");
+  });
+
+  it("loginMethodsが正しければsynthできる", () => {
+    expect(() => template({
+      cognitoDomainPrefix: "workmate12-entra-test",
+      entraEnabled: true,
+      entraTenantId: "00000000-0000-0000-0000-000000000001",
+      entraClientId: "00000000-0000-0000-0000-000000000002",
+      entraClientSecretName: "workmate12/entra/client-secret",
+      loginMethods: "entra",
+    })).not.toThrow();
+  });
 });

@@ -6,7 +6,8 @@
     "userPoolClientId": "",
     "cognitoDomain": "",
     "entraEnabled": false,
-    "entraProviderName": null
+    "entraProviderName": null,
+    "loginMethods": "cognito"
   },
   "agent": {
     "runtimeArn": "",

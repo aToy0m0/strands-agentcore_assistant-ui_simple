@@ -1,5 +1,15 @@
 import { Amplify } from "aws-amplify";
 
+import {
+  isLoginMethods,
+  showsCognitoLogin as showsCognitoFor,
+  showsEntraLogin as showsEntraFor,
+  LOGIN_METHOD_VALUES,
+  type LoginMethods,
+} from "../shared/login-methods.js";
+
+export type { LoginMethods };
+
 export type RuntimeConfig = {
   environment: string;
   auth: {
@@ -9,9 +19,18 @@ export type RuntimeConfig = {
     cognitoDomain: string;
     entraEnabled: boolean;
     entraProviderName: string | null;
+    loginMethods: LoginMethods;
   };
   agent: { runtimeArn: string; qualifier: string };
 };
+
+export function showsCognitoLogin(config: RuntimeConfig): boolean {
+  return showsCognitoFor(config.auth.loginMethods);
+}
+
+export function showsEntraLogin(config: RuntimeConfig): boolean {
+  return showsEntraFor(config.auth.loginMethods);
+}
 
 function required(value: unknown, name: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(`${name} is required`);
@@ -30,6 +49,12 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
   required(value.agent?.qualifier, "agent.qualifier");
   if (typeof value.auth.entraEnabled !== "boolean") throw new Error("auth.entraEnabled must be a boolean");
   if (value.auth.entraEnabled && !value.auth.entraProviderName) throw new Error("auth.entraProviderName is required when Entra is enabled");
+  if (!isLoginMethods(value.auth.loginMethods)) {
+    throw new Error(`auth.loginMethods must be one of: ${LOGIN_METHOD_VALUES.join(", ")}`);
+  }
+  if (value.auth.loginMethods !== "cognito" && !value.auth.entraEnabled) {
+    throw new Error(`auth.loginMethods=${value.auth.loginMethods} requires auth.entraEnabled`);
+  }
   return value;
 }
 

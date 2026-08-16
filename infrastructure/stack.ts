@@ -16,6 +16,7 @@ import { BlockPublicAccess, Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3"
 import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
 import { MODEL_CATALOG } from "../shared/model-catalog.js";
+import { resolveLoginMethods } from "../shared/login-methods.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const entraProviderName = "MicrosoftEntraID";
@@ -32,6 +33,7 @@ export class WorkmateCodeZipStack extends Stack {
 
     const entraEnabledValue = this.node.tryGetContext("entraEnabled");
     const entraEnabled = entraEnabledValue === true || entraEnabledValue === "true";
+    const loginMethods = resolveLoginMethods(this.node.tryGetContext("loginMethods"), entraEnabled);
     const configuredDomainPrefix = this.node.tryGetContext("cognitoDomainPrefix");
     if (configuredDomainPrefix !== undefined && (typeof configuredDomainPrefix !== "string" || !/^[a-z0-9-]{1,63}$/.test(configuredDomainPrefix))) {
       throw new Error("cognitoDomainPrefix must contain only lowercase letters, numbers, and hyphens");
@@ -184,6 +186,7 @@ export class WorkmateCodeZipStack extends Stack {
             cognitoDomain: `${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com`,
             entraEnabled,
             entraProviderName: entraEnabled ? entraProviderName : null,
+            loginMethods,
           },
           agent: { runtimeArn: agentRuntime.attrAgentRuntimeArn, qualifier: "DEFAULT" },
         }),

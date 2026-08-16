@@ -273,6 +273,36 @@ npm run deploy -- `
 
 ただし`entraEnabled`だけを省略した場合は停止しません。false扱いとなり、`EntraIdentityProvider`がテンプレートから消えて**既存のIdentity Providerが削除されます**。CDKコンテキストは前回値を保存しないため、**2回目以降のデプロイでも毎回この5個をすべて渡してください**。
 
+### ログイン画面に出す認証手段を選ぶ
+
+`loginMethods`コンテキストで、ログイン画面の表示を切り替えられます。
+
+| 値 | ログイン画面の表示 |
+|---|---|
+| `cognito` | メールアドレスとパスワードの入力欄だけ |
+| `entra` | 「Microsoftで続ける」ボタンだけ |
+| `cognito-and-entra` | 両方（区切り線付き） |
+
+省略した場合の既定は、`entraEnabled=true`なら`cognito-and-entra`、そうでなければ`cognito`です。これまでと同じ表示になります。
+
+Entra SSOだけを見せる場合は次のようにします。
+
+```powershell
+npm run deploy -- `
+  -c cognitoDomainPrefix=$domainPrefix `
+  -c entraEnabled=true `
+  -c entraTenantId=$tenantId `
+  -c entraClientId=$appClientId `
+  -c entraClientSecretName="workmate12/entra/client-secret" `
+  -c loginMethods=entra
+```
+
+`entraEnabled=true`なしで`entra`や`cognito-and-entra`を指定すると、ログイン手段のない画面になるためsynthが停止します。未知の値も同様に停止します。
+
+> **これは画面表示の制御であり、認証方式そのものを無効化するものではありません。**
+> `loginMethods=entra`にしてもCognito App ClientのパスワードログインとHosted UIは有効なままです。
+> パスワード認証を実際に塞ぐには、App Clientの`authFlows`と`supportedIdentityProviders`を変更する必要があります。
+
 デプロイ後、Identity Providerが実際に作られたかを確認します。コンテキストが渡らなかった場合、スタック更新は成功したまま何も作られないため、この確認は省略しないでください。
 
 ```powershell
