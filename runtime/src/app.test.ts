@@ -1,7 +1,7 @@
 import { EventType, type RunAgentInput } from "@ag-ui/core";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { createApp } from "./app.js";
+import { createApp, type InvocationIdentity } from "./app.js";
 
 const input = {
   threadId: "0198d773-8f67-7678-baba-668a48c4d76f",
@@ -18,6 +18,7 @@ const input = {
   context: [],
   forwardedProps: { inference: { model: "nova-2-lite", reasoning: { enabled: true, effort: "medium" } } },
 };
+const authorization = `Bearer header.${Buffer.from(JSON.stringify({ sub: "user-123" })).toString("base64url")}.signature`;
 
 function eventsFrom(text: string): Array<Record<string, unknown>> {
   return text.split(/\r?\n/u)
@@ -32,14 +33,19 @@ describe("AgentCore HTTP contract", () => {
 
   it("rejects invalid AG-UI input before invoking the agent", async () => {
     const invokeAgent = vi.fn();
-    await request(createApp(invokeAgent)).post("/invocations").send({}).expect(400);
+    await request(createApp(invokeAgent)).post("/invocations").set("Authorization", authorization).send({}).expect(400);
     expect(invokeAgent).not.toHaveBeenCalled();
   });
 
+  it("rejects an invocation without the verified token forwarded by AgentCore", async () => {
+    await request(createApp(vi.fn())).post("/invocations").send(input).expect(401);
+  });
+
   it("streams the AG-UI lifecycle", async () => {
-    const invokeAgent = vi.fn(async function* (_input: RunAgentInput, _cancelSignal: AbortSignal) {
+    const invokeAgent = vi.fn(async function* (_input: RunAgentInput, _cancelSignal: AbortSignal, _identity: InvocationIdentity) {
       void _input;
       void _cancelSignal;
+      void _identity;
       yield { type: "reasoning" as const, text: "計算方法を確認しています。\n" };
       yield { type: "reasoning-end" as const };
       yield { type: "text" as const, text: "3" };
@@ -47,6 +53,7 @@ describe("AgentCore HTTP contract", () => {
     });
     const response = await request(createApp(invokeAgent))
       .post("/invocations")
+      .set("Authorization", authorization)
       .set("Accept", "text/event-stream")
       .send(input)
       .expect(200)
@@ -55,6 +62,7 @@ describe("AgentCore HTTP contract", () => {
     expect(invokeAgent).toHaveBeenCalledOnce();
     expect(invokeAgent.mock.calls[0]?.[0]).toMatchObject(input);
     expect(invokeAgent.mock.calls[0]?.[1]).toBeInstanceOf(AbortSignal);
+    expect(invokeAgent.mock.calls[0]?.[2]).toEqual({ actorId: "user-123", authorization });
     expect(response.text).toContain(EventType.RUN_STARTED);
     expect(response.text).toContain(EventType.REASONING_START);
     expect(response.text).toContain(EventType.REASONING_MESSAGE_START);
@@ -74,6 +82,7 @@ describe("AgentCore HTTP contract", () => {
       throw new Error("Bedrock unavailable: secret model details");
     }))
       .post("/invocations")
+      .set("Authorization", authorization)
       .set("Accept", "text/event-stream")
       .send(input)
       .expect(200);
@@ -92,6 +101,7 @@ describe("AgentCore HTTP contract", () => {
       throw new Error("Bedrock unavailable");
     }))
       .post("/invocations")
+      .set("Authorization", authorization)
       .set("Accept", "text/event-stream")
       .send(input)
       .expect(200);
@@ -110,6 +120,7 @@ describe("AgentCore HTTP contract", () => {
       yield { type: "text" as const, text: "回答2" };
     }))
       .post("/invocations")
+      .set("Authorization", authorization)
       .set("Accept", "text/event-stream")
       .send(input)
       .expect(200);
@@ -137,6 +148,7 @@ describe("AgentCore HTTP contract", () => {
       yield { type: "text" as const, text: "結果はこちら！" };
     }))
       .post("/invocations")
+      .set("Authorization", authorization)
       .set("Accept", "text/event-stream")
       .send(input)
       .expect(200);
@@ -159,6 +171,7 @@ describe("AgentCore HTTP contract", () => {
       yield { type: "text" as const, text: "結論です。" };
     }))
       .post("/invocations")
+      .set("Authorization", authorization)
       .set("Accept", "text/event-stream")
       .send(input)
       .expect(200);
@@ -176,6 +189,7 @@ describe("AgentCore HTTP contract", () => {
       yield { type: "text" as const, text: "3です。" };
     }))
       .post("/invocations")
+      .set("Authorization", authorization)
       .set("Accept", "text/event-stream")
       .send(input)
       .expect(200);
@@ -186,5 +200,24 @@ describe("AgentCore HTTP contract", () => {
     expect(start?.parentMessageId).toBe(text?.messageId);
     expect(events.find((event) => event.type === EventType.TOOL_CALL_ARGS)?.delta).toBe('{"expression":"1+2"}');
     expect(events.find((event) => event.type === EventType.TOOL_CALL_RESULT)?.content).toBe('{"result":{"value":3}}');
+  });
+
+  it("finishes with an interrupt outcome without requiring assistant text", async () => {
+    const response = await request(createApp(async function* () {
+      yield { type: "tool-start" as const, id: "tool-ask", name: "ask_user", input: { question: "対象は？" } };
+      yield { type: "interrupt" as const, interrupts: [{ id: "interrupt-1", reason: "input_required", message: "対象は？" }] };
+    }))
+      .post("/invocations")
+      .set("Authorization", authorization)
+      .set("Accept", "text/event-stream")
+      .send(input)
+      .expect(200);
+
+    const events = eventsFrom(response.text);
+    expect(events.find((event) => event.type === EventType.RUN_FINISHED)?.outcome).toEqual({
+      type: "interrupt",
+      interrupts: [{ id: "interrupt-1", reason: "input_required", message: "対象は？" }],
+    });
+    expect(events.some((event) => event.type === EventType.RUN_ERROR)).toBe(false);
   });
 });

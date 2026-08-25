@@ -20,6 +20,8 @@
   "dependencies": {
     "@ag-ui/core": "0.0.57",
     "@ag-ui/encoder": "0.0.57",
+    "@aws-sdk/client-bedrock-agentcore": "3.1092.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@strands-agents/sdk": "1.10.0",
     "express": "5.1.0",
     "zod": "4.3.6"

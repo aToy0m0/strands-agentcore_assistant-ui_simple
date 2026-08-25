@@ -7,6 +7,24 @@ async function* stream(events: AgentStreamEvent[]) {
 }
 
 describe("toSafeAgentOutput", () => {
+  it("maps a Strands interrupt to an AG-UI input request", async () => {
+    const events = stream([{
+      type: "interruptEvent",
+      interrupt: { id: "interrupt-1", reason: { question: "対象は？", options: ["A", "B"] } },
+    }] as unknown as AgentStreamEvent[]);
+    const output = [];
+    for await (const event of toSafeAgentOutput(events, { model: "nova-2-lite", reasoning: { enabled: true, effort: "medium" } })) output.push(event);
+    expect(output).toEqual([{
+      type: "interrupt",
+      interrupts: [{
+        id: "interrupt-1",
+        reason: "input_required",
+        message: "対象は？",
+        metadata: { question: "対象は？", options: ["A", "B"] },
+      }],
+    }]);
+  });
+
   it("redacts Nova reasoning but reports answer progress", async () => {
     const events = stream([
       {

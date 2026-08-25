@@ -14,13 +14,14 @@
     "runtime:install": "npm ci --prefix runtime",
     "runtime:build": "npm ci --prefix runtime --no-audit --no-fund && npm run package --prefix runtime",
     "runtime:test": "npm test --prefix runtime",
+    "gateway:test": "node --test gateway-tool/index.node-test.mjs",
     "cdk:synth": "npm run build && npm run runtime:build && cdk synth",
     "cdk:diff": "npm run build && npm run runtime:build && cdk diff WorkmateCodeZipStack",
     "deploy": "npm run build && npm run runtime:build && cdk deploy WorkmateCodeZipStack --require-approval never",
     "destroy": "cdk destroy WorkmateCodeZipStack",
     "cognito:user:create": "node scripts/manage-cognito-user.mjs create",
     "cognito:user:set-password": "node scripts/manage-cognito-user.mjs set-password",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run runtime:test && cdk synth"
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run runtime:test && npm run gateway:test && cdk synth"
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.57",

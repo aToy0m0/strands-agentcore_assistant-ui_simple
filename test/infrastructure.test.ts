@@ -142,7 +142,8 @@ describe("ログ出力", () => {
   it("未指定の種別は環境変数を設定せず既定の有効のままにする", () => {
     const runtimes = template({ cognitoDomainPrefix: "workmate12-test" }).findResources("AWS::BedrockAgentCore::Runtime");
     const environment = Object.values(runtimes)[0]?.Properties.EnvironmentVariables ?? {};
-    expect(Object.keys(environment)).toEqual(["AWS_REGION"]);
+    expect(environment).not.toHaveProperty("RUNTIME_LOG_MODEL");
+    expect(environment).not.toHaveProperty("RUNTIME_LOG_TOOL");
   });
 
   it("on/off以外の指定は拒否する", () => {

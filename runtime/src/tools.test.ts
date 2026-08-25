@@ -1,5 +1,22 @@
-import { describe, expect, it } from "vitest";
-import { calculate, calculator, currentDateTimeAt, currentDatetime, textStatistics, textStatisticsTool } from "./tools.js";
+import type { ToolContext } from "@strands-agents/sdk";
+import { describe, expect, it, vi } from "vitest";
+import { askUser, calculate, calculator, currentDateTimeAt, currentDatetime, textStatistics, textStatisticsTool } from "./tools.js";
+
+describe("ask_user", () => {
+  it("interrupts with the question and returns the resumed answer", () => {
+    const interrupt = vi.fn(() => "  青  ");
+    const result = askUser({ question: "好きな色は？", options: ["赤", "青"] }, { interrupt } as unknown as ToolContext);
+    expect(interrupt).toHaveBeenCalledWith({
+      name: "ask-user",
+      reason: { question: "好きな色は？", options: ["赤", "青"], allowFreeText: true },
+    });
+    expect(result).toEqual({ answer: "青" });
+  });
+
+  it("fails without a tool context instead of fabricating an answer", () => {
+    expect(() => askUser({ question: "確認しますか？" })).toThrow("requires an agent tool context");
+  });
+});
 
 describe("calculator", () => {
   it.each([

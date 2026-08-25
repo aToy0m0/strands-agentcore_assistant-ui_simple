@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import {
   ActionBarPrimitive,
   AttachmentPrimitive,
@@ -15,6 +15,7 @@ import {
   useAui,
   useAuiState,
 } from "@assistant-ui/react";
+import { useAgUiInterrupts, useAgUiSubmitInterruptResponses } from "@assistant-ui/react-ag-ui";
 import {
   ArrowDown, ArrowUp, AudioWaveform, ChevronDown, ChevronLeft, ChevronRight,
   Camera, Copy, File as FileIcon, FileUp, FolderKanban, Image as ImageIcon, Pencil, Plus,
@@ -283,6 +284,7 @@ function AssistantMessage() {
             return null;
           }}
         </MessagePrimitive.GroupedParts>
+        <AskUserPrompt />
         <MessagePrimitive.Error>
           <ErrorPrimitive.Root className="mt-3 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             <ErrorPrimitive.Message />
@@ -298,6 +300,49 @@ function AssistantMessage() {
         <BranchPicker />
       </div>
     </MessagePrimitive.Root>
+  );
+}
+
+function AskUserPrompt() {
+  const interrupts = useAgUiInterrupts();
+  const submitResponses = useAgUiSubmitInterruptResponses();
+  const requiresInput = useAuiState((state) => state.message.status?.type === "requires-action" && state.message.status.reason === "interrupt");
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const pending = requiresInput ? interrupts : [];
+  if (pending.length === 0) return null;
+
+  const canSubmit = pending.every((item) => answers[item.id]?.trim());
+  const submit = async () => {
+    if (!canSubmit || submitting) return;
+    setSubmitting(true);
+    try {
+      await submitResponses(pending.map((item) => ({
+        interruptId: item.id,
+        status: "resolved" as const,
+        payload: answers[item.id]!.trim(),
+      })));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "回答を送信できませんでした";
+      window.dispatchEvent(new CustomEvent("workmate-error", { detail: message }));
+      setSubmitting(false);
+    }
+  };
+  const onSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    void submit();
+  };
+
+  return (
+    <form className="my-3 space-y-4 rounded-xl border border-agent/30 bg-agent/5 p-4" onSubmit={onSubmit}>
+      {pending.map((interrupt) => {
+        const metadata = interrupt.metadata ?? {};
+        const options = Array.isArray(metadata.options) ? metadata.options.filter((option): option is string => typeof option === "string") : [];
+        const allowFreeText = metadata.allowFreeText !== false;
+        return <fieldset key={interrupt.id} disabled={submitting}><legend className="font-medium">{interrupt.message ?? "確認させてください。"}</legend>{options.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{options.map((option) => <Button key={option} type="button" variant={answers[interrupt.id] === option ? "default" : "outline"} onClick={() => setAnswers((current) => ({ ...current, [interrupt.id]: option }))}>{option}</Button>)}</div>}{allowFreeText && <input className="mt-3 w-full rounded-lg border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" value={answers[interrupt.id] ?? ""} onChange={(event) => setAnswers((current) => ({ ...current, [interrupt.id]: event.target.value }))} aria-label="質問への回答" placeholder="回答を入力" />}</fieldset>;
+      })}
+      <Button type="submit" disabled={!canSubmit || submitting}>{submitting ? "送信中…" : "回答して続ける"}</Button>
+    </form>
   );
 }
 

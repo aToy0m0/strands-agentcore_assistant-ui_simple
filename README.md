@@ -21,25 +21,40 @@ Browser
      -> optional: Microsoft Entra ID (OIDC)
   -> AgentCore Runtime (Bearer JWT / AG-UI SSE)
        -> Bedrock models
+       -> AgentCore Gateway (Bearer JWT / MCP)
+            -> Lambda support-directory tool
+       -> AgentCore Memory
+            -> short-term chat events (30 days)
+            -> user-scoped facts / preferences
 
 CloudFormation / CDK
   -> private S3 for CodeZip
   -> BucketDeployment uploads deployment_package.zip
   -> AWS::BedrockAgentCore::Runtime
+  -> AgentCore Gateway / Lambda target
+  -> AgentCore Memory / KMS key
 ```
 
 含めないもの:
 
-- BFF、Web Lambda、Lambda Function URL
+- BFF、Web Lambda、Lambda Function URL（GatewayのツールLambdaは含む）
 - DynamoDB、PostgreSQL、RDS
-- AgentCore Memoryや外部セッションストア
+- 外部データベースや外部セッションストア
 - 匿名ユーザー構成
 
-CDKのS3デプロイ用カスタムリソースはCloudFormation実行時だけLambdaを使用します。アプリの通信経路にLambda/BFFはありません。
+ブラウザとRuntimeの間にLambda/BFFはありません。LambdaはAgentCore GatewayがMCPツールを実行するときだけ呼び出します。CDKのS3デプロイ用カスタムリソースLambdaはCloudFormation実行時だけ動作します。
+
+## Gatewayツール
+
+Runtimeは、AgentCore Runtimeで検証済みのCognitoアクセストークンをAgentCore Gatewayへ引き継ぎ、StrandsのMCPクライアントとして接続します。Gatewayも同じUser PoolとApp ClientでJWTを検証し、Gatewayの実行ロールがLambdaターゲットを呼び出します。
+
+サンプルの`lookup_support_contact`は、`sales`、`support`、`billing`のいずれかを受け取り、固定の問い合わせメールアドレスと営業時間を返す読み取り専用ツールです。入力スキーマはGatewayで公開し、Lambdaでも許可値を検証します。
 
 ## UIと履歴
 
-チャット、サイドバー、プロジェクト、設定、モデル選択などのUIは既存実装を踏襲しています。DBを持たないため、スレッドとプロジェクトは現在のブラウザタブ内だけの状態です。再読み込み後の履歴復元、プロジェクト分離メモリ、フィードバック保存は行いません。
+チャット履歴はAgentCore Memoryの短期記憶へ30日間保存し、再読み込み後も復元します。Cognito JWTの`sub`を`actorId`、チャットの`threadId`を`sessionId`に使うため、履歴は認証ユーザーごとに分離されます。完了した各ターンをユーザー発言とアシスタント応答の対で保存します。
+
+長期記憶はユーザー単位の事実と好みを非同期に抽出し、後続チャットで関連する記憶だけを検索して応答コンテキストへ加えます。プロジェクト単位の記憶、プロジェクトの永続化、フィードバック保存は対象外です。チャット名変更とアーカイブもブラウザタブ内だけの状態です。
 
 ## 必要環境
 
@@ -91,12 +106,16 @@ X-Rayトレースとスパン（CloudWatch GenAI Observability）は含めてい
 - 非公開CodeZip S3バケット / BucketDeployment
 - AgentCore Runtime実行ロール
 - AgentCore CodeZip Runtime（AGUI、Cognito JWT authorizer）
+- AgentCore Gateway（MCP、Cognito JWT authorizer）/ 問い合わせ先検索Lambdaターゲット
+- AgentCore Memory（短期履歴、個人の事実・好み）/ 暗号化用KMSキー
 
 `RuntimeArtifactsBucketName`をCloudFormation outputへ出すため、CDKが作成したS3へZIPが投入されたことを確認できます。
 
 ## セキュリティ上の注意
 
 **このサンプルには未実装の防御があります。** 認証境界として機能している部分、未実装の防御、検証済みの範囲を[セキュリティ上の注意と既知の制約](doc/security-notes.md)にまとめています。利用前に必ず確認してください。
+
+脅威モデル（STRIDE）、実装済みの統制、責任分界、データ分類、リスク評価は[セキュリティドキュメント](SECURITY.md)にまとめています。
 
 ## 既知の不具合
 

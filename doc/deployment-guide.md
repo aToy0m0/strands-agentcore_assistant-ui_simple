@@ -53,6 +53,16 @@ aws cloudformation describe-stacks `
   --output text
 ```
 
+### Gatewayツールを確認する
+
+ログイン後、チャットで次のように依頼します。
+
+```text
+サポート部門の問い合わせメールアドレスと営業時間を確認して
+```
+
+ツール実行欄に`SupportDirectory___lookup_support_contact`が表示され、`support@example.com`と営業時間が返ればRuntime → AgentCore Gateway → Lambdaの経路は正常です。Gateway URLとターゲットIDはCloudFormation出力`ToolGatewayUrl`、`SupportDirectoryTargetId`でも確認できます。
+
 ## オプション: Cognito + Microsoft Entra ID
 
 > **このSSO連携は2026-08-16に実テナントで疎通確認済みです。**
@@ -397,7 +407,7 @@ aws secretsmanager describe-secret --secret-id "workmate12/entra/client-secret" 
 
 ## 削除
 
-このサンプルのS3、User Pool、Runtimeは`DESTROY`方針です。必要なデータがないことを確認してから実行します。
+このサンプルのS3、User Pool、Runtime、AgentCore Gateway、ツールLambda、AgentCore Memory、Memory暗号化用KMSキーは`DESTROY`方針です。チャット履歴と個人の長期記憶を含め、必要なデータがないことを確認してから実行します。
 
 ```powershell
 npm run destroy -- -c cognitoDomainPrefix=<deployed-domain-prefix>

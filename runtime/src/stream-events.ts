@@ -14,6 +14,23 @@ export async function* toSafeAgentOutput(
   const splitter = new ReasoningTagSplitter();
 
   for await (const event of events) {
+    if (event.type === "interruptEvent") {
+      const reason = event.interrupt.reason;
+      const details = typeof reason === "object" && reason !== null && !Array.isArray(reason)
+        ? reason as Record<string, unknown>
+        : {};
+      const question = typeof details.question === "string" ? details.question : "入力が必要です。";
+      yield {
+        type: "interrupt",
+        interrupts: [{
+          id: event.interrupt.id,
+          reason: "input_required",
+          message: question,
+          metadata: details,
+        }],
+      };
+      continue;
+    }
     if (event.type === "beforeToolCallEvent") {
       if (reasoningBlockOpen) {
         reasoningBlockOpen = false;

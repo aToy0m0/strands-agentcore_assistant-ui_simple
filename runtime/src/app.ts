@@ -1,16 +1,32 @@
 import { EventType, RunAgentInputSchema, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import { EventEncoder } from "@ag-ui/encoder";
 import express, { type ErrorRequestHandler } from "express";
+import { z } from "zod";
+import { actorIdFromAuthorization, AuthenticationError } from "./auth.js";
 import { createRuntimeLogger, parseLogSettings, type RuntimeLogger } from "./logging.js";
+import type { AgentCoreMemory } from "./memory.js";
 
 export type AgentOutputEvent =
   | { type: "reasoning"; text: string }
   | { type: "reasoning-end" }
   | { type: "tool-start"; id: string; name: string; input: unknown }
   | { type: "tool-result"; id: string; result: unknown; error?: string }
+  | { type: "interrupt"; interrupts: Array<{ id: string; reason: string; message?: string; metadata?: Record<string, unknown> }> }
   | { type: "text"; text: string };
 
-export type StreamAgent = (input: RunAgentInput, cancelSignal: AbortSignal) => AsyncIterable<AgentOutputEvent>;
+export type InvocationIdentity = { actorId: string; authorization: string };
+export type StreamAgent = (input: RunAgentInput, cancelSignal: AbortSignal, identity: InvocationIdentity) => AsyncIterable<AgentOutputEvent>;
+
+const historyOperationSchema = z.discriminatedUnion("operation", [
+  z.object({ operation: z.literal("memory.listThreads") }).strict(),
+  z.object({ operation: z.literal("memory.loadThread"), sessionId: z.string().min(33).max(100) }).strict(),
+  z.object({ operation: z.literal("memory.deleteThread"), sessionId: z.string().min(33).max(100) }).strict(),
+]);
+
+type AppServices = {
+  memory?: AgentCoreMemory;
+  logger?: RuntimeLogger;
+};
 
 export function promptFrom(input: RunAgentInput): string {
   const message = [...input.messages].reverse().find((item) => item.role === "user");
@@ -21,10 +37,43 @@ export function promptFrom(input: RunAgentInput): string {
   return prompt;
 }
 
-export function createApp(streamAgent: StreamAgent, logger: RuntimeLogger = createRuntimeLogger(parseLogSettings(process.env))) {
+export function createApp(streamAgent: StreamAgent, services: AppServices = {}) {
+  const logger = services.logger ?? createRuntimeLogger(parseLogSettings(process.env));
   const app = express();
   app.get("/ping", (_request, response) => response.json({ status: "Healthy" }));
   app.post("/invocations", express.json({ limit: "4mb" }), async (request, response) => {
+    const authorization = request.get("authorization");
+    let actorId: string;
+    try {
+      // AgentCore RuntimeのJWT Authorizerが検証済みのトークンだけを転送する。
+      // actorIdはクライアント入力ではなく、その検証済みJWTのsubから確定する。
+      actorId = actorIdFromAuthorization(authorization);
+    } catch (error) {
+      if (error instanceof AuthenticationError) return response.status(401).json({ error: error.message });
+      throw error;
+    }
+
+    const historyOperation = historyOperationSchema.safeParse(request.body);
+    if (historyOperation.success) {
+      if (!services.memory) return response.status(503).json({ error: "AgentCore Memory is unavailable" });
+      try {
+        if (historyOperation.data.operation === "memory.listThreads") {
+          return response.json({ threads: await services.memory.listThreads(actorId) });
+        }
+        if (historyOperation.data.operation === "memory.loadThread") {
+          return response.json({ messages: await services.memory.loadMessages(actorId, historyOperation.data.sessionId) });
+        }
+        await services.memory.deleteThread(actorId, historyOperation.data.sessionId);
+        return response.status(204).end();
+      } catch (error) {
+        logger.error("memory.operation.failed", {
+          operation: historyOperation.data.operation,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return response.status(500).json({ error: "チャット履歴の操作に失敗しました" });
+      }
+    }
+
     const parsed = RunAgentInputSchema.safeParse(request.body);
     if (!parsed.success) {
       logger.error("invocation.rejected", { reason: "invalid AG-UI RunAgentInput", issues: parsed.error.issues });
@@ -69,8 +118,9 @@ export function createApp(streamAgent: StreamAgent, logger: RuntimeLogger = crea
       const startedAt = Date.now();
       let assistantText = "";
       let reasoningLength = 0;
+      let interrupts: Extract<AgentOutputEvent, { type: "interrupt" }>["interrupts"] | undefined;
 
-      for await (const event of streamAgent(input, cancellation.signal)) {
+      for await (const event of streamAgent(input, cancellation.signal, { actorId, authorization: authorization! })) {
         if (response.destroyed || response.writableEnded) return;
         if (event.type === "reasoning-end") {
           closeReasoning();
@@ -115,6 +165,13 @@ export function createApp(streamAgent: StreamAgent, logger: RuntimeLogger = crea
           continue;
         }
 
+        if (event.type === "interrupt") {
+          closeReasoning();
+          closeText();
+          interrupts = event.interrupts;
+          continue;
+        }
+
         closeReasoning();
         if (!textMessageId) {
           textMessageId = lastTextMessageId === undefined ? assistantMessageId : crypto.randomUUID();
@@ -125,9 +182,19 @@ export function createApp(streamAgent: StreamAgent, logger: RuntimeLogger = crea
         assistantText += event.text;
         send({ type: EventType.TEXT_MESSAGE_CONTENT, messageId: textMessageId, delta: event.text });
       }
-      if (!hasText) throw new Error("Strands returned no assistant text");
       closeReasoning();
       closeText();
+      if (interrupts) {
+        send({
+          type: EventType.RUN_FINISHED,
+          threadId: input.threadId,
+          runId: input.runId,
+          outcome: { type: "interrupt", interrupts },
+        });
+        response.end();
+        return;
+      }
+      if (!hasText) throw new Error("Strands returned no assistant text");
       logger.log("model", "assistant.completed", { threadId: input.threadId, runId: input.runId, elapsedMs: Date.now() - startedAt, reasoningLength, text: assistantText });
       send({ type: EventType.RUN_FINISHED, threadId: input.threadId, runId: input.runId });
       response.end();

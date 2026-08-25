@@ -28,7 +28,7 @@ async function accessToken(forceRefresh = false): Promise<string> {
   return value;
 }
 
-function authenticatedFetch(threadId: string): typeof fetch {
+export function authenticatedFetch(threadId: string): typeof fetch {
   return async (input, init) => {
     const send = async (forceRefresh: boolean) => {
       const headers = new Headers(input instanceof Request ? input.headers : undefined);
@@ -46,19 +46,83 @@ function authenticatedFetch(threadId: string): typeof fetch {
   };
 }
 
+type MemoryThread = { id: string; title: string; createdAt: string };
+type MemoryMessage = { id: string; role: "user" | "assistant"; text: string; createdAt: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseThreads(value: unknown): MemoryThread[] {
+  if (!isRecord(value) || !Array.isArray(value.threads)) throw new Error("チャット履歴一覧の応答形式が不正です");
+  return value.threads.map((thread) => {
+    if (!isRecord(thread) || typeof thread.id !== "string" || typeof thread.title !== "string" || typeof thread.createdAt !== "string") {
+      throw new Error("チャット履歴一覧の応答形式が不正です");
+    }
+    return { id: thread.id, title: thread.title, createdAt: thread.createdAt };
+  });
+}
+
+function parseMessages(value: unknown): MemoryMessage[] {
+  if (!isRecord(value) || !Array.isArray(value.messages)) throw new Error("チャット履歴の応答形式が不正です");
+  return value.messages.map((message) => {
+    if (!isRecord(message)
+      || typeof message.id !== "string"
+      || (message.role !== "user" && message.role !== "assistant")
+      || typeof message.text !== "string"
+      || typeof message.createdAt !== "string") {
+      throw new Error("チャット履歴の応答形式が不正です");
+    }
+    return { id: message.id, role: message.role, text: message.text, createdAt: message.createdAt };
+  });
+}
+
+function toThreadMessage(message: MemoryMessage): ThreadMessage {
+  const createdAt = new Date(message.createdAt);
+  if (Number.isNaN(createdAt.getTime())) throw new Error("チャット履歴の日時が不正です");
+  if (message.role === "user") {
+    return {
+      id: message.id,
+      role: "user",
+      content: [{ type: "text", text: message.text }],
+      attachments: [],
+      createdAt,
+      metadata: { custom: {} },
+    };
+  }
+  return {
+    id: message.id,
+    role: "assistant",
+    content: [{ type: "text", text: message.text }],
+    status: { type: "complete", reason: "stop" },
+    createdAt,
+    metadata: { unstable_state: null, unstable_annotations: [], unstable_data: [], steps: [], custom: {} },
+  };
+}
+
+async function memoryRequest(config: RuntimeConfig, requestSessionId: string, body: Record<string, string>): Promise<unknown> {
+  const response = await authenticatedFetch(requestSessionId)(runtimeInvocationUrl(config), {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as unknown;
+    const message = isRecord(payload) && typeof payload.error === "string" ? payload.error : `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return response.status === 204 ? undefined : response.json();
+}
+
 export function AgUiRuntimeProvider({ config, children }: { config: RuntimeConfig; children: ReactNode }) {
   const [threadId, setThreadId] = useState<string>(() => crypto.randomUUID());
   const [items, setItems] = useState<Array<RegularThread | ArchivedThread>>([]);
-  const messagesByThread = useRef(new Map<string, readonly ThreadMessage[]>());
+  const [isLoadingThreads, setIsLoadingThreads] = useState(true);
+  const historyRequestSessionId = useRef(crypto.randomUUID());
   const runtimeRef = useRef<ReturnType<typeof useAgUiRuntime> | null>(null);
   const regular = items.filter((item): item is RegularThread => item.status === "regular");
   const archived = items.filter((item): item is ArchivedThread => item.status === "archived");
   const replace = useCallback((id: string, update: Partial<RegularThread | ArchivedThread>) => setItems((current) => current.map((item) => item.id === id ? { ...item, ...update } as RegularThread | ArchivedThread : item)), []);
-  const saveCurrentMessages = useCallback(() => {
-    const runtime = runtimeRef.current;
-    if (!runtime) throw new Error("チャットRuntimeが初期化されていません");
-    messagesByThread.current.set(threadId, [...runtime.thread.getState().messages]);
-  }, [threadId]);
   const showCurrent = useCallback(() => {
     const runtime = runtimeRef.current;
     if (!runtime) throw new Error("チャットRuntimeが初期化されていません");
@@ -72,15 +136,37 @@ export function AgUiRuntimeProvider({ config, children }: { config: RuntimeConfi
     });
   }, [threadId]);
 
+  useEffect(() => {
+    let active = true;
+    void memoryRequest(config, historyRequestSessionId.current, { operation: "memory.listThreads" })
+      .then((payload) => {
+        if (!active) return;
+        setItems(parseThreads(payload).map((thread) => ({
+          id: thread.id,
+          remoteId: thread.id,
+          title: thread.title,
+          status: "regular" as const,
+          custom: { started: true, createdAt: thread.createdAt },
+        })));
+      })
+      .catch((error: unknown) => {
+        if (active) window.dispatchEvent(new CustomEvent("workmate-error", { detail: error instanceof Error ? error.message : String(error) }));
+      })
+      .finally(() => {
+        if (active) setIsLoadingThreads(false);
+      });
+    return () => { active = false; };
+  }, [config]);
+
   const threadList = useMemo<UseAgUiThreadListAdapter>(() => ({
     threadId,
+    isLoading: isLoadingThreads,
     threads: regular,
     archivedThreads: archived,
-    onSwitchToNewThread: async () => { saveCurrentMessages(); setThreadId(crypto.randomUUID()); },
+    onSwitchToNewThread: async () => { setThreadId(crypto.randomUUID()); },
     onSwitchToThread: async (id) => {
-      saveCurrentMessages();
-      const messages = messagesByThread.current.get(id);
-      if (!messages) throw new Error(`チャット履歴が見つかりません: ${id}`);
+      const payload = await memoryRequest(config, historyRequestSessionId.current, { operation: "memory.loadThread", sessionId: id });
+      const messages = parseMessages(payload).map(toThreadMessage);
       setThreadId(id);
       return { messages };
     },
@@ -88,8 +174,11 @@ export function AgUiRuntimeProvider({ config, children }: { config: RuntimeConfi
     onUpdateCustom: async (id, custom) => replace(id, { custom }),
     onArchive: async (id) => replace(id, { status: "archived" }),
     onUnarchive: async (id) => replace(id, { status: "regular" }),
-    onDelete: async (id) => { messagesByThread.current.delete(id); setItems((current) => current.filter((item) => item.id !== id)); },
-  }), [archived, regular, replace, saveCurrentMessages, threadId]);
+    onDelete: async (id) => {
+      await memoryRequest(config, historyRequestSessionId.current, { operation: "memory.deleteThread", sessionId: id });
+      setItems((current) => current.filter((item) => item.id !== id));
+    },
+  }), [archived, config, isLoadingThreads, regular, replace, threadId]);
 
   const agent = useMemo(() => new RunErrorAwareHttpAgent({ url: runtimeInvocationUrl(config), agentId: "workmate", threadId, headers: { Accept: "text/event-stream" }, fetch: authenticatedFetch(threadId) }), [config, threadId]);
   const attachments = useMemo(() => new CompositeAttachmentAdapter([new SimpleImageAttachmentAdapter(), new SimpleTextAttachmentAdapter()]), []);

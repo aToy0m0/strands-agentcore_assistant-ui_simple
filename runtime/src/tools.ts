@@ -1,4 +1,4 @@
-import { tool } from "@strands-agents/sdk";
+import { tool, type ToolContext } from "@strands-agents/sdk";
 import { z } from "zod";
 
 const MAX_TEXT_UTF16_CODE_UNITS = 100_000;
@@ -122,4 +122,35 @@ export const textStatisticsTool = tool({
   callback: ({ text, locale }) => textStatistics(text, locale),
 });
 
-export const utilityTools = [calculator, currentDatetime, textStatisticsTool];
+export type AskUserInput = {
+  question: string;
+  options?: string[];
+  allowFreeText?: boolean;
+};
+
+export function askUser(input: AskUserInput, context?: ToolContext) {
+  if (!context) throw new Error("ask_user requires an agent tool context");
+  const answer = context.interrupt<string>({
+    name: "ask-user",
+    reason: {
+      question: input.question,
+      ...(input.options ? { options: input.options } : {}),
+      allowFreeText: input.allowFreeText ?? true,
+    },
+  });
+  if (typeof answer !== "string" || !answer.trim()) throw new Error("ask_user requires a non-empty user answer");
+  return { answer: answer.trim() };
+}
+
+export const askUserTool = tool({
+  name: "ask_user",
+  description: "Pause and ask the user one necessary clarifying question. Use only when missing information materially changes the result. Provide concise options when the choices are known.",
+  inputSchema: z.object({
+    question: z.string().trim().min(1).max(500),
+    options: z.array(z.string().trim().min(1).max(100)).min(2).max(6).optional(),
+    allowFreeText: z.boolean().optional(),
+  }),
+  callback: askUser,
+});
+
+export const utilityTools = [calculator, currentDatetime, textStatisticsTool, askUserTool];

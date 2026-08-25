@@ -1,7 +1,18 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CfnOutput, Duration, Fn, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
-import { CfnRuntime } from "aws-cdk-lib/aws-bedrockagentcore";
+import {
+  CfnRuntime,
+  Gateway,
+  GatewayAuthorizer,
+  GatewayProtocol,
+  ManagedMemoryStrategy,
+  MCPProtocolVersion,
+  Memory,
+  MemoryStrategyType,
+  SchemaDefinitionType,
+  ToolSchema,
+} from "aws-cdk-lib/aws-bedrockagentcore";
 import { AllowedMethods, CachePolicy, Distribution, PriceClass, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import {
@@ -13,6 +24,8 @@ import {
   UserPoolClientIdentityProvider,
 } from "aws-cdk-lib/aws-cognito";
 import { Effect, PolicyStatement, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import { Key } from "aws-cdk-lib/aws-kms";
+import { Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
 import { BlockPublicAccess, Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
 import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
 import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
@@ -193,6 +206,96 @@ export class WorkmateCodeZipStack extends Stack {
     });
     const runtimeObjectKey = Fn.join("/", [runtimeKeyPrefix, Fn.select(0, runtimeUpload.objectKeys)]);
     const runtimeRole = new Role(this, "RuntimeRole", { assumedBy: new ServicePrincipal("bedrock-agentcore.amazonaws.com") });
+    const gatewayToolLogGroup = new LogGroup(this, "GatewayToolLogs", {
+      retention: logRetention,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    const gatewayTool = new LambdaFunction(this, "GatewayTool", {
+      functionName: "workmate-support-directory-tool",
+      description: "Read-only support contact lookup for the Workmate AgentCore Gateway",
+      runtime: Runtime.NODEJS_22_X,
+      handler: "index.handler",
+      code: Code.fromAsset(path.join(root, "..", "gateway-tool"), { exclude: ["*.node-test.mjs"] }),
+      timeout: Duration.seconds(5),
+      memorySize: 128,
+      logGroup: gatewayToolLogGroup,
+    });
+    const gatewayRole = new Role(this, "ToolGatewayRole", {
+      description: "Least-privilege execution role for the Workmate AgentCore Gateway",
+      assumedBy: new ServicePrincipal("bedrock-agentcore.amazonaws.com").withConditions({
+        StringEquals: { "aws:SourceAccount": this.account },
+        ArnLike: { "aws:SourceArn": `arn:${this.partition}:bedrock-agentcore:${this.region}:${this.account}:gateway/workmate-tools*` },
+      }),
+    });
+    const toolGateway = new Gateway(this, "ToolGateway", {
+      gatewayName: "workmate-tools",
+      description: "Workmate MCP gateway for authenticated Lambda tools",
+      authorizerConfiguration: GatewayAuthorizer.usingCognito({
+        userPool,
+        allowedClients: [userPoolClient],
+      }),
+      protocolConfiguration: GatewayProtocol.mcp({
+        supportedVersions: [MCPProtocolVersion.of("2025-11-25")],
+        instructions: "Use the available read-only Workmate business tools when their descriptions match the user request.",
+      }),
+      role: gatewayRole,
+    });
+    const supportDirectoryTarget = toolGateway.addLambdaTarget("SupportDirectoryTarget", {
+      gatewayTargetName: "SupportDirectory",
+      description: "Looks up the contact address and business hours for a support department",
+      lambdaFunction: gatewayTool,
+      toolSchema: ToolSchema.fromInline([{
+        name: "lookup_support_contact",
+        description: "Look up the email address and business hours for sales, support, or billing.",
+        inputSchema: {
+          type: SchemaDefinitionType.OBJECT,
+          properties: {
+            department: {
+              type: SchemaDefinitionType.STRING,
+              description: "Department name: sales, support, or billing.",
+            },
+          },
+          required: ["department"],
+        },
+        outputSchema: {
+          type: SchemaDefinitionType.OBJECT,
+          properties: {
+            department: { type: SchemaDefinitionType.STRING },
+            email: { type: SchemaDefinitionType.STRING },
+            hours: { type: SchemaDefinitionType.STRING },
+          },
+          required: ["department", "email", "hours"],
+        },
+      }]),
+    });
+    const memoryKey = new Key(this, "MemoryKey", {
+      alias: "alias/workmate-codezip-memory",
+      description: "Encrypts Workmate AgentCore Memory",
+      enableKeyRotation: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    const memory = new Memory(this, "ChatMemory", {
+      memoryName: "workmate_codezip_memory",
+      description: "User-scoped chat history and personal long-term memory",
+      expirationDuration: Duration.days(30),
+      kmsKey: memoryKey,
+      memoryStrategies: [
+        new ManagedMemoryStrategy(MemoryStrategyType.SEMANTIC, {
+          strategyName: "PersonalFacts",
+          description: "Extract durable user facts across chat sessions",
+          namespaces: ["/workmate/{actorId}/facts"],
+        }),
+        new ManagedMemoryStrategy(MemoryStrategyType.USER_PREFERENCE, {
+          strategyName: "UserPreferences",
+          description: "Extract durable user preferences across chat sessions",
+          namespaces: ["/workmate/{actorId}/preferences"],
+        }),
+      ],
+    });
+    memory.grantWrite(runtimeRole);
+    memory.grantReadShortTermMemory(runtimeRole);
+    memory.grantReadLongTermMemory(runtimeRole);
+    memory.grantDeleteShortTermMemory(runtimeRole);
     runtimeRole.addToPolicy(new PolicyStatement({
       effect: Effect.ALLOW,
       actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
@@ -225,11 +328,17 @@ export class WorkmateCodeZipStack extends Stack {
           allowedClients: [userPoolClient.userPoolClientId],
         },
       },
+      requestHeaderConfiguration: { requestHeaderAllowlist: ["Authorization"] },
       roleArn: runtimeRole.roleArn,
       networkConfiguration: { networkMode: "PUBLIC" },
       lifecycleConfiguration: { idleRuntimeSessionTimeout: 300, maxLifetime: 1800 },
       protocolConfiguration: "AGUI",
-      environmentVariables: { AWS_REGION: this.region, ...runtimeLogEnvironment },
+      environmentVariables: {
+        AWS_REGION: this.region,
+        GATEWAY_URL: toolGateway.gatewayUrl!,
+        MEMORY_ID: memory.memoryId,
+        ...runtimeLogEnvironment,
+      },
     });
     agentRuntime.node.addDependency(runtimeUpload);
 
@@ -273,6 +382,9 @@ export class WorkmateCodeZipStack extends Stack {
     new CfnOutput(this, "CognitoDomain", { value: `${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com` });
     new CfnOutput(this, "EntraRedirectUri", { value: `https://${userPoolDomain.domainName}.auth.${this.region}.amazoncognito.com/oauth2/idpresponse` });
     new CfnOutput(this, "AgentRuntimeArn", { value: agentRuntime.attrAgentRuntimeArn });
+    new CfnOutput(this, "MemoryId", { value: memory.memoryId });
+    new CfnOutput(this, "ToolGatewayUrl", { value: toolGateway.gatewayUrl! });
+    new CfnOutput(this, "SupportDirectoryTargetId", { value: supportDirectoryTarget.targetId });
     new CfnOutput(this, "RuntimeArtifactsBucketName", { value: artifactBucket.bucketName });
     new CfnOutput(this, "RuntimeLogGroupName", { value: runtimeLogGroup.logGroupName });
   }
