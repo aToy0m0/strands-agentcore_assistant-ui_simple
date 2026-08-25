@@ -1,0 +1,76 @@
+[CmdletBinding()]
+param(
+    [string]$ConfigPath = (Join-Path $PSScriptRoot "deploy-config.psd1")
+)
+
+$ErrorActionPreference = "Stop"
+
+if (-not (Test-Path -LiteralPath $ConfigPath -PathType Leaf)) {
+    throw "Deployment config not found: $ConfigPath. Copy deploy-config.example.psd1 and set actual values."
+}
+
+$config = Import-PowerShellDataFile -LiteralPath $ConfigPath
+
+function Get-RequiredConfigString {
+    param([Parameter(Mandatory)][string]$Name)
+
+    $value = $config[$Name]
+    if ($value -isnot [string] -or [string]::IsNullOrWhiteSpace($value) -or $value.Contains("<")) {
+        throw "Deployment config '$Name' must contain an actual value."
+    }
+    return $value.Trim()
+}
+
+$profile = Get-RequiredConfigString "Profile"
+$region = Get-RequiredConfigString "Region"
+$webDebugMode = Get-RequiredConfigString "WebDebugMode"
+if ($webDebugMode -notin @("on", "off")) {
+    throw "Deployment config 'WebDebugMode' must be 'on' or 'off'."
+}
+
+$contexts = [ordered]@{
+    cognitoDomainPrefix = Get-RequiredConfigString "CognitoDomainPrefix"
+}
+
+if ($config.EntraEnabled -isnot [bool]) {
+    throw "Deployment config 'EntraEnabled' must be `$true or `$false."
+}
+
+$contexts.entraEnabled = $config.EntraEnabled.ToString().ToLowerInvariant()
+if ($config.EntraEnabled) {
+    $contexts.entraTenantId = Get-RequiredConfigString "EntraTenantId"
+    $contexts.entraClientId = Get-RequiredConfigString "EntraClientId"
+    $contexts.entraClientSecretName = Get-RequiredConfigString "EntraClientSecretName"
+}
+
+$optionalContexts = [ordered]@{
+    loginMethods      = "LoginMethods"
+    logRetentionDays  = "LogRetentionDays"
+    runtimeLogRequest = "RuntimeLogRequest"
+    runtimeLogModel   = "RuntimeLogModel"
+    runtimeLogTool    = "RuntimeLogTool"
+}
+foreach ($entry in $optionalContexts.GetEnumerator()) {
+    $value = $config[$entry.Value]
+    if ($null -ne $value -and -not [string]::IsNullOrWhiteSpace([string]$value)) {
+        $contexts[$entry.Key] = [string]$value
+    }
+}
+$contexts.webDebugMode = $webDebugMode
+
+$npmArguments = @("run", "deploy", "--", "--profile", $profile, "--region", $region)
+foreach ($entry in $contexts.GetEnumerator()) {
+    $npmArguments += @("-c", "$($entry.Key)=$($entry.Value)")
+}
+
+$projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+Push-Location $projectRoot
+try {
+    & npm.cmd @npmArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "CDK deployment failed with exit code $LASTEXITCODE."
+    }
+}
+finally {
+    Pop-Location
+}

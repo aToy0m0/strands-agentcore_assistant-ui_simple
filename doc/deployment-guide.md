@@ -14,6 +14,30 @@ npm run verify
 
 `public/runtime-config.json`は未デプロイ時に空値です。AWSの実値へフォールバックしないため、`npm run dev`だけでは認証画面を起動せず、設定不足を明示します。実画面のE2Eはデプロイ後に行います。
 
+## 再デプロイ用のローカル設定
+
+CDKコンテキストは前回値を保持しません。Entra設定などの指定漏れを防ぐため、exampleをGit管理外の設定へコピーします。
+
+```powershell
+Copy-Item .\scripts\deploy-config.example.psd1 .\scripts\deploy-config.psd1
+```
+
+`deploy-config.psd1`のプレースホルダーをデプロイ済み環境の値へ置き換える。このファイルは`.gitignore`対象となる。`Profile`の初期値は`default`、`Region`は`us-east-1`、`WebDebugMode`は`off`。クライアントシークレット本文は記載せず、Secrets Managerのシークレット名だけを設定する。
+
+通常の再デプロイ:
+
+```powershell
+.\scripts\Deploy-Workmate.ps1
+```
+
+ブラウザデバッグを有効にする場合は、`deploy-config.psd1`を`WebDebugMode = "on"`へ変更して同じコマンドを実行する。
+
+```powershell
+.\scripts\Deploy-Workmate.ps1
+```
+
+スクリプトはプロファイル、リージョン、CDKコンテキストを設定ファイルから読み、必須値の空欄やexampleのプレースホルダーをビルド前に拒否する。別の設定ファイルを使う場合だけ`-ConfigPath`を明示する。
+
 ## 標準: Cognitoのみ
 
 CDKは新しいUser Pool、public App Client、AWS提供Cognitoドメインを作ります。匿名アクセスはありません。ドメインプレフィックスを省略すると`workmate12-<AWS account ID>`を使用します。明示する場合は、他User Poolへ未割り当てのグローバルに一意な値を指定します。
@@ -21,11 +45,9 @@ CDKは新しいUser Pool、public App Client、AWS提供Cognitoドメインを�
 AWSログイン後に実行します。
 
 ```powershell
-aws login --profile admin
-$env:AWS_PROFILE = "admin"
-$env:AWS_REGION = "us-east-1"
-
-npm run deploy -- -c cognitoDomainPrefix=<unique-domain-prefix>
+aws login --profile default
+npm.cmd run deploy -- --profile default --region us-east-1 `
+  -c cognitoDomainPrefix=<unique-domain-prefix>
 ```
 
 `<unique-domain-prefix>`の決め方と空き確認は[プレースホルダの確認方法](#プレースホルダの確認方法)を参照してください。
@@ -33,7 +55,7 @@ npm run deploy -- -c cognitoDomainPrefix=<unique-domain-prefix>
 デプロイ後、初期ユーザーと恒久パスワードを作ります。
 
 ```powershell
-npm run cognito:user:create -- --email user@example.com --profile admin
+npm run cognito:user:create -- --email user@example.com --profile default
 ```
 
 `user@example.com`は作成したい初期ユーザーのメールアドレスです。Cognito側の検証済み属性として登録されるだけで、実際にメールは送信されません。
@@ -47,7 +69,6 @@ CloudFormationのスタック出力からCloudFrontのURLを確認します。
 ```powershell
 aws cloudformation describe-stacks `
   --stack-name WorkmateCodeZipStack `
-  --profile admin `
   --region us-east-1 `
   --query "Stacks[0].Outputs[?OutputKey=='ApplicationUrl'].OutputValue | [0]" `
   --output text
@@ -62,6 +83,61 @@ aws cloudformation describe-stacks `
 ```
 
 ツール実行欄に`SupportDirectory___lookup_support_contact`が表示され、`support@example.com`と営業時間が返ればRuntime → AgentCore Gateway → Lambdaの経路は正常です。Gateway URLとターゲットIDはCloudFormation出力`ToolGatewayUrl`、`SupportDirectoryTargetId`でも確認できます。
+
+### ブラウザデバッグモード
+
+AG-UIのSSE、初回履歴取得、認証更新、ツールイベントなどをブラウザ開発者ツールで確認するときだけ有効にします。既定はOFFです。
+
+Cognitoのみの構成でONにする場合は、`deploy-config.psd1`の設定を変更してデプロイする。
+
+```powershell
+# scripts/deploy-config.psd1内
+@{
+  # 他の設定は省略
+  WebDebugMode = "on"
+}
+```
+
+```powershell
+.\scripts\Deploy-Workmate.ps1
+```
+
+デバッグを終了したら、設定をOFFへ戻して再デプロイする。
+
+```powershell
+# scripts/deploy-config.psd1内
+@{
+  # 他の設定は省略
+  WebDebugMode = "off"
+}
+```
+
+```powershell
+.\scripts\Deploy-Workmate.ps1
+```
+
+`WebDebugMode`は`on`で有効、`off`で無効となる。それ以外の値やキーの省略は実行前に拒否する。
+
+Entra IDを有効にしている環境では、`deploy-config.psd1`のEntra設定を毎回自動的に渡します。`EntraEnabled = $true`のときに必須値が欠けていればデプロイ前に停止します。
+
+デプロイ後、設定画面の「接続」タブで`Browser debug`が`ON`になっていることを確認します。開発者ツールのConsoleで`Workmate debug`を検索し、「ログを保持（Preserve log）」を有効にしてから新しいタブでページを開きます。
+
+主なログ:
+
+| Consoleイベント | 内容 |
+|---|---|
+| `app.config.loaded` | 配信されたRuntime設定とデバッグ状態 |
+| `auth.session.loaded` | Access Tokenが存在するか。トークン本文は出さない |
+| `history.request` / `history.response` | スレッド一覧・メッセージ取得・削除 |
+| `http.request` / `http.response` | URL、HTTP状態、Content-Type、request ID |
+| `http.response.body` | JSONまたはSSEの生レスポンス本文プレビュー |
+| `[HTTP] Stream format detected` | AG-UIクライアントが判定したSSE／Protobuf形式 |
+| `[SSE] Event received` | 解析済みAG-UIイベント |
+| `assistant-ui` | Runtimeのイベント処理と警告 |
+| `ag-ui.runtime.error` | `RUN_ERROR`またはプロトコル解析エラー |
+| `window.error` / `window.unhandledrejection` | 未処理のブラウザ例外 |
+
+Authorization、JWT、token、secret、passwordというキー、Base64添付データはマスクします。一方、会話本文、履歴、ツール引数・結果、SSE本文はデバッグに必要なためConsoleへ表示されます。機密情報を扱うセッションでは有効にせず、採取したログを共有する前に内容を確認してください。
 
 ## オプション: Cognito + Microsoft Entra ID
 
@@ -112,7 +188,7 @@ Disconnect-MgGraph
 Cognitoのドメインホストが必要なので、先にスタック出力を確認します。
 
 ```powershell
-aws cloudformation describe-stacks --stack-name WorkmateCodeZipStack --region us-east-1 --query "Stacks[0].Outputs" --output table 
+aws cloudformation describe-stacks --stack-name WorkmateCodeZipStack --region us-east-1 --query "Stacks[0].Outputs" --output table
 ```
 
 作成方法は2通りあります。どちらか一方だけを実行してください。
@@ -213,13 +289,13 @@ Entraが一度だけ返す`$created.ClientSecret`を、例として`workmate12/e
 初回登録（シークレットが未作成の場合）:
 
 ```powershell
-aws secretsmanager create-secret --name "workmate12/entra/client-secret" --secret-string $($created.ClientSecret) --profile admin --region us-east-1
+aws secretsmanager create-secret --name "workmate12/entra/client-secret" --secret-string $($created.ClientSecret) --profile default --region us-east-1
 ```
 
 既に同名のシークレットが存在する場合（再作成や更新時）:
 
 ```powershell
-aws secretsmanager put-secret-value --secret-id "workmate12/entra/client-secret" --secret-string $($created.ClientSecret) --profile admin --region us-east-1
+aws secretsmanager put-secret-value --secret-id "workmate12/entra/client-secret" --secret-string $($created.ClientSecret) --profile default --region us-east-1
 ```
 
 `$created.ClientSecret`ではなく`$($created.ClientSecret)`と書く点に注意してください。PowerShellの引数モードでは`$created`だけが展開され、`.ClientSecret`はリテラルとして残ります。
@@ -274,14 +350,14 @@ npm run deploy -- `
 デプロイ後、Identity Providerが実際に作られたかを確認します。コンテキストが渡らなかった場合、スタック更新は成功したまま何も作られないため、この確認は省略しないでください。
 
 ```powershell
-aws cognito-idp list-identity-providers --user-pool-id <UserPoolId> --max-results 10 --profile admin --region us-east-1
+aws cognito-idp list-identity-providers --user-pool-id <UserPoolId> --max-results 10 --profile default --region us-east-1
 ```
 
 `Providers`に`ProviderName: MicrosoftEntraID`、`ProviderType: OIDC`が現れれば成功です。空配列`[]`の場合はコンテキストが届いていません。[補足: PowerShellで`npm run`の引数がCDKへ渡らない場合](../README.md#補足-powershellでnpm-runの引数がcdkへ渡らない場合)を確認してください。
 
 ## プレースホルダの確認方法
 
-READMEに登場する`<...>`と`$created.*`の入手方法をまとめます。AWS側の値は`--profile admin --region us-east-1`を前提とします。
+READMEに登場する`<...>`と`$created.*`の入手方法をまとめる。AWS側の値は`--profile default --region us-east-1`を前提とする。
 
 | プレースホルダ | 意味 | 確認元 |
 |---|---|---|
@@ -299,13 +375,13 @@ READMEに登場する`<...>`と`$created.*`の入手方法をまとめます。A
 デプロイ後はスタック出力にすべて揃っています。
 
 ```powershell
-aws cloudformation describe-stacks --stack-name WorkmateCodeZipStack --profile admin --region us-east-1 --query "Stacks[0].Outputs" --output table
+aws cloudformation describe-stacks --stack-name WorkmateCodeZipStack --profile default --region us-east-1 --query "Stacks[0].Outputs" --output table
 ```
 
 個別に取り出す場合は`OutputKey`を指定します。
 
 ```powershell
-aws cloudformation describe-stacks --stack-name WorkmateCodeZipStack --profile admin --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text
+aws cloudformation describe-stacks --stack-name WorkmateCodeZipStack --profile default --region us-east-1 --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue | [0]" --output text
 ```
 
 `<deployed-domain-prefix>`は`CognitoDomain`（`<prefix>.auth.us-east-1.amazoncognito.com`）の先頭ラベルです。
@@ -315,13 +391,13 @@ aws cloudformation describe-stacks --stack-name WorkmateCodeZipStack --profile a
 Cognitoのドメインプレフィックスはリージョン内でグローバルに一意である必要があります。既定値に使うAWSアカウントIDは次で確認します。
 
 ```powershell
-aws sts get-caller-identity --query Account --output text --profile admin
+aws sts get-caller-identity --query Account --output text --profile default
 ```
 
 指定したい値が空いているかは次で確認します。エラーにならず`DomainDescription`が空オブジェクトなら未使用です。他User Poolが使用中の場合はUser Pool IDを含む内容が返ります。
 
 ```powershell
-aws cognito-idp describe-user-pool-domain --domain <unique-domain-prefix> --profile admin --region us-east-1
+aws cognito-idp describe-user-pool-domain --domain <unique-domain-prefix> --profile default --region us-east-1
 ```
 
 ### `<Entra tenant GUID>`を確認する
@@ -396,13 +472,13 @@ $rotated = & ".\scripts\entra\New-EntraCognitoOidcClientSecret.ps1" `
 ### Secrets Managerのシークレット名を確認する
 
 ```powershell
-aws secretsmanager list-secrets --query "SecretList[].Name" --output table --profile admin --region us-east-1
+aws secretsmanager list-secrets --query "SecretList[].Name" --output table --profile default --region us-east-1
 ```
 
 登録済みかどうかだけを確かめる場合は次を使います。シークレット本文は表示されません。
 
 ```powershell
-aws secretsmanager describe-secret --secret-id "workmate12/entra/client-secret" --query Name --output text --profile admin --region us-east-1
+aws secretsmanager describe-secret --secret-id "workmate12/entra/client-secret" --query Name --output text --profile default --region us-east-1
 ```
 
 ## 削除

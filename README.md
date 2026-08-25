@@ -70,17 +70,27 @@ Dockerは不要です。CodeZipと静的フロントエンドだけをビルド�
 
 ローカル検証、デプロイ、Microsoft Entra ID連携、削除の手順は[デプロイ手順書](doc/deployment-guide.md)にまとめています。
 
+2回目以降のデプロイでは、Git管理外の`scripts/deploy-config.psd1`へAWSプロファイル、リージョン、認証、ログ、デバッグの設定を保存し、次のコマンドを使用できます。必須値が空の場合はビルド前に停止します。AWSプロファイルの初期値は`default`です。
+
+```powershell
+.\scripts\Deploy-Workmate.ps1
+```
+
+ソースコード、インフラ、Runtime、Gatewayツール、テスト、生成物の配置意図は[フォルダ構成](doc/folder-structure.md)を参照してください。
+
+実装済み機能の詳細は[Runtime機能一覧](doc/runtime-features.md)と[UI機能一覧](doc/ui-features.md)を参照してください。
+
 ## ログ
 
 AgentCore Runtimeのログを、保持期間つきのCloudWatch Logsロググループへ配信します。ロググループ名はスタック出力`RuntimeLogGroupName`で確認できます。
 
 保持期間の既定は3日です。デプロイ時に変更できます。指定できるのはCloudWatch Logsが受け付ける日数（1、3、5、7、14、30、…）だけで、それ以外はsynthが停止します。
 
-```powershell
-npm run deploy -- -c cognitoDomainPrefix=<unique-domain-prefix> -c logRetentionDays=30
-```
+`scripts/deploy-config.psd1`の`LogRetentionDays`で指定します。
 
 配信するのは`APPLICATION_LOGS`（エージェント実行時のログ）と`USAGE_LOGS`（セッション単位の消費量）です。
+
+ブラウザ側のAG-UI通信を調べる場合は、デプロイ時に`-c webDebugMode=on`を指定できます。既定はOFFです。Consoleへ履歴、メッセージ、ツール引数・結果を含む診断情報が出るため、一時的な調査だけに使用し、終了後は`-c webDebugMode=off`で再デプロイしてください。詳しい手順は[デプロイ手順書の「ブラウザデバッグモード」](doc/deployment-guide.md#ブラウザデバッグモード)を参照してください。
 
 Runtimeは1行1JSONの構造化ログを出します。CloudWatch Logs Insightsで`event`や`threadId`で絞り込めます。
 
