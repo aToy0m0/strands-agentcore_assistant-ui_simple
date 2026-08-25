@@ -1,5 +1,6 @@
 {
   "environment": "local",
+  "debug": false,
   "auth": {
     "region": "",
     "userPoolId": "",

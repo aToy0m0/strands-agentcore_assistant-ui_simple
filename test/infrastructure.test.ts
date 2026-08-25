@@ -1,7 +1,7 @@
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { describe, expect, it } from "vitest";
-import { WorkmateCodeZipStack, resolveLogRetention } from "../infrastructure/stack.js";
+import { WorkmateCodeZipStack, resolveLogRetention, resolveWebDebugMode } from "../infrastructure/stack.js";
 import { RetentionDays } from "aws-cdk-lib/aws-logs";
 
 function template(context: Record<string, unknown> = {}) {
@@ -37,6 +37,20 @@ describe("WorkmateCodeZipStack", () => {
       ProtocolConfiguration: "AGUI",
       AgentRuntimeArtifact: { CodeConfiguration: Match.objectLike({ Runtime: "NODE_22", EntryPoint: ["dist/app.js"] }) },
       AuthorizerConfiguration: { CustomJWTAuthorizer: Match.objectLike({ AllowedClients: Match.anyValue() }) },
+    }));
+  });
+
+  it("Runtime実行ロールへMemory暗号化キーの利用権限を付ける", () => {
+    const value = template({ cognitoDomainPrefix: "workmate12-test" });
+    value.hasResourceProperties("AWS::IAM::Policy", Match.objectLike({
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: "kms:DescribeKey",
+            Resource: { "Fn::GetAtt": [Match.stringLikeRegexp("MemoryKey"), "Arn"] },
+          }),
+        ]),
+      }),
     }));
   });
 
@@ -148,5 +162,19 @@ describe("ログ出力", () => {
 
   it("on/off以外の指定は拒否する", () => {
     expect(() => template({ cognitoDomainPrefix: "workmate12-test", runtimeLogModel: "maybe" })).toThrow("must be on or off");
+  });
+});
+
+describe("Webデバッグモード", () => {
+  it("既定は無効でon/offを明示的に変換する", () => {
+    expect(resolveWebDebugMode(undefined)).toBe(false);
+    expect(resolveWebDebugMode("on")).toBe(true);
+    expect(resolveWebDebugMode(true)).toBe(true);
+    expect(resolveWebDebugMode("off")).toBe(false);
+    expect(resolveWebDebugMode(false)).toBe(false);
+  });
+
+  it("on/off以外の指定は拒否する", () => {
+    expect(() => resolveWebDebugMode("verbose")).toThrow("webDebugMode must be on or off");
   });
 });

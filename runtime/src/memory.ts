@@ -4,6 +4,7 @@ import {
   DeleteEventCommand,
   ListEventsCommand,
   ListSessionsCommand,
+  ResourceNotFoundException,
   RetrieveMemoryRecordsCommand,
   Role,
   type Event,
@@ -24,6 +25,10 @@ export type StoredChatThread = {
 };
 
 const titleLength = 40;
+
+function isMissingActor(error: unknown): boolean {
+  return error instanceof ResourceNotFoundException && /^Actor .+ not found$/u.test(error.message);
+}
 
 function conversationalMessages(events: readonly Event[]): StoredChatMessage[] {
   return events.flatMap((event) => (event.payload ?? []).flatMap((payload, index) => {
@@ -83,17 +88,23 @@ export class AgentCoreMemory {
   async listThreads(actorId: string): Promise<StoredChatThread[]> {
     const sessions = [];
     let nextToken: string | undefined;
-    do {
-      const page = await this.client.send(new ListSessionsCommand({
-        memoryId: this.memoryId,
-        actorId,
-        maxResults: 100,
-        nextToken,
-      }));
-      sessions.push(...(page.sessionSummaries ?? []));
-      if (page.nextToken === nextToken && page.nextToken !== undefined) throw new Error("AgentCore Memory returned a repeated session page token");
-      nextToken = page.nextToken;
-    } while (nextToken);
+    try {
+      do {
+        const page = await this.client.send(new ListSessionsCommand({
+          memoryId: this.memoryId,
+          actorId,
+          maxResults: 100,
+          nextToken,
+        }));
+        sessions.push(...(page.sessionSummaries ?? []));
+        if (page.nextToken === nextToken && page.nextToken !== undefined) throw new Error("AgentCore Memory returned a repeated session page token");
+        nextToken = page.nextToken;
+      } while (nextToken);
+    } catch (error) {
+      // AgentCore Memoryは最初のイベントが保存されるまでActorを作らない。
+      if (isMissingActor(error)) return [];
+      throw error;
+    }
 
     const recentSessions = sessions
       .filter((session): session is typeof session & { sessionId: string; createdAt: Date } => Boolean(session.sessionId && session.createdAt))

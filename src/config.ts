@@ -12,6 +12,7 @@ export type { LoginMethods };
 
 export type RuntimeConfig = {
   environment: string;
+  debug: boolean;
   auth: {
     region: string;
     userPoolId: string;
@@ -37,10 +38,10 @@ function required(value: unknown, name: string): string {
   return value;
 }
 
-export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
-  const response = await fetch("/runtime-config.json", { cache: "no-store" });
-  if (!response.ok) throw new Error(`runtime-config.jsonの取得に失敗しました (${response.status})`);
-  const value = await response.json() as RuntimeConfig;
+export function parseRuntimeConfig(input: unknown): RuntimeConfig {
+  if (typeof input !== "object" || input === null) throw new Error("runtime-config.json must be an object");
+  const value = input as RuntimeConfig;
+  if (typeof value.debug !== "boolean") throw new Error("debug must be a boolean");
   required(value.auth?.region, "auth.region");
   required(value.auth?.userPoolId, "auth.userPoolId");
   required(value.auth?.userPoolClientId, "auth.userPoolClientId");
@@ -56,6 +57,12 @@ export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
     throw new Error(`auth.loginMethods=${value.auth.loginMethods} requires auth.entraEnabled`);
   }
   return value;
+}
+
+export async function loadRuntimeConfig(): Promise<RuntimeConfig> {
+  const response = await fetch("/runtime-config.json", { cache: "no-store" });
+  if (!response.ok) throw new Error(`runtime-config.jsonの取得に失敗しました (${response.status})`);
+  return parseRuntimeConfig(await response.json());
 }
 
 export function configureAmplify(config: RuntimeConfig) {

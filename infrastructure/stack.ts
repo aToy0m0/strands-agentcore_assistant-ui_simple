@@ -70,6 +70,14 @@ export function runtimeLogSettings(scope: Construct): Record<string, string> {
   return settings;
 }
 
+export function resolveWebDebugMode(configured: unknown): boolean {
+  if (configured === undefined || configured === null) return false;
+  const value = String(configured).trim().toLowerCase();
+  if (value === "on" || value === "true") return true;
+  if (value === "off" || value === "false") return false;
+  throw new Error("webDebugMode must be on or off");
+}
+
 function contextString(scope: Construct, name: string): string {
   const value = scope.node.tryGetContext(name);
   if (typeof value !== "string" || !value.trim()) throw new Error(`CDK context ${name} is required when Entra ID is enabled`);
@@ -90,6 +98,7 @@ export class WorkmateCodeZipStack extends Stack {
     const domainPrefix = typeof configuredDomainPrefix === "string" ? configuredDomainPrefix : `workmate12-${this.account}`;
     const logRetention = resolveLogRetention(this.node.tryGetContext("logRetentionDays"));
     const runtimeLogEnvironment = runtimeLogSettings(this);
+    const webDebugMode = resolveWebDebugMode(this.node.tryGetContext("webDebugMode"));
 
     const webBucket = new Bucket(this, "WebAssets", {
       encryption: BucketEncryption.S3_MANAGED,
@@ -296,6 +305,12 @@ export class WorkmateCodeZipStack extends Stack {
     memory.grantReadShortTermMemory(runtimeRole);
     memory.grantReadLongTermMemory(runtimeRole);
     memory.grantDeleteShortTermMemory(runtimeRole);
+    memoryKey.grantEncryptDecrypt(runtimeRole);
+    runtimeRole.addToPolicy(new PolicyStatement({
+      effect: Effect.ALLOW,
+      actions: ["kms:DescribeKey"],
+      resources: [memoryKey.keyArn],
+    }));
     runtimeRole.addToPolicy(new PolicyStatement({
       effect: Effect.ALLOW,
       actions: ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
@@ -358,6 +373,7 @@ export class WorkmateCodeZipStack extends Stack {
         Source.asset(path.join(root, "..", "dist")),
         Source.jsonData("runtime-config.json", {
           environment: "production",
+          debug: webDebugMode,
           auth: {
             region: this.region,
             userPoolId: userPool.userPoolId,

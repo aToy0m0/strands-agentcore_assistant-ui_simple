@@ -3,6 +3,7 @@ import {
   CreateEventCommand,
   ListEventsCommand,
   ListSessionsCommand,
+  ResourceNotFoundException,
   RetrieveMemoryRecordsCommand,
   Role,
 } from "@aws-sdk/client-bedrock-agentcore";
@@ -74,6 +75,25 @@ describe("AgentCoreMemory", () => {
       title: "最初の質問",
       createdAt: "2026-01-01T00:00:00.000Z",
     }]);
+  });
+
+  it("treats an actor without any events as an empty thread list", async () => {
+    const send = vi.fn().mockRejectedValue(new ResourceNotFoundException({
+      $metadata: {},
+      message: "Actor actor-1 not found",
+    }));
+
+    await expect(memoryWith(send).listThreads("actor-1")).resolves.toEqual([]);
+  });
+
+  it("does not hide other resource-not-found failures", async () => {
+    const error = new ResourceNotFoundException({
+      $metadata: {},
+      message: "Memory memory-123 not found",
+    });
+    const send = vi.fn().mockRejectedValue(error);
+
+    await expect(memoryWith(send).listThreads("actor-1")).rejects.toBe(error);
   });
 
   it("retrieves user-scoped facts and preferences", async () => {
