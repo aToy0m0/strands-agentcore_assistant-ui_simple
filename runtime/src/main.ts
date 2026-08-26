@@ -2,6 +2,7 @@ import { Agent, InterruptResponseContent, McpClient } from "@strands-agents/sdk"
 import { createApp, promptFrom } from "./app.js";
 import { AgentCoreMemory } from "./memory.js";
 import { createBedrockModel } from "./model-factory.js";
+import { createKnowledgeBaseSearchTool } from "./knowledge-base.js";
 import { WORKMATE_SYSTEM_PROMPT } from "./system-prompt.js";
 import { utilityTools } from "./tools.js";
 import { toSafeAgentOutput } from "./stream-events.js";
@@ -15,6 +16,7 @@ function required(name: string) {
 
 const region = required("AWS_REGION");
 const gatewayUrl = required("GATEWAY_URL");
+const knowledgeBaseSearchTool = createKnowledgeBaseSearchTool(required("KNOWLEDGE_BASE_ID"), region);
 const memory = AgentCoreMemory.create(required("MEMORY_ID"), region);
 const interruptedAgents = new Map<string, {
   agent: Agent;
@@ -64,7 +66,7 @@ const app = createApp(async function* (input, cancelSignal, identity) {
     : new Agent({
       model: createBedrockModel(region, selection),
       systemPrompt: systemPromptWithMemory(personalMemory!),
-      tools: [...utilityTools, gatewayClient!],
+      tools: [...utilityTools, knowledgeBaseSearchTool, gatewayClient!],
       messages: modelHistory!,
       printer: false,
     });

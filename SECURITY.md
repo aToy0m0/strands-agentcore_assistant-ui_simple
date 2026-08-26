@@ -85,8 +85,9 @@ S3デプロイ用のカスタムリソースLambdaはCloudFormation実行時に�
   - 計算ツール: 非有限数の被演算子、ゼロ除算、非有限の結果
   - 日時ツール: 無効なIANAタイムゾーン
   - 文字数統計ツール: 100,000 UTF-16コードユニットを超えるテキスト
+  - Knowledge Base検索ツール: 空の検索語、1,000文字超の検索語、1～10以外の取得件数
   - Gateway問い合わせ先ツール: `sales`、`support`、`billing`以外の部署
-- ツールは計算、現在日時、文字数統計、ユーザー確認、固定の問い合わせ先検索のみ。ファイル、Web、任意AWS API、OSコマンドへの到達手段を持たない
+- ツールは計算、現在日時、文字数統計、ユーザー確認、固定の問い合わせ先検索、指定済みKnowledge Base検索のみ。ファイル、Web、任意AWS API、OSコマンドへの到達手段を持たない
 
 ### IAM最小権限
 
@@ -95,6 +96,7 @@ Runtime実行ロールとGateway実行ロールの権限を用途別に分離し
 | 権限 | リソース | 備考 |
 |---|---|---|
 | `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` | モデルカタログに定義したinference profileとfoundation modelのARN | US Geo Inference Profileを使うモデルは`us-east-1` / `us-east-2` / `us-west-2`のfoundation model ARNも許可する。クロスリージョン推論の実行先がこの3リージョンに及ぶため |
+| `bedrock:Retrieve` | `knowledge-base/SAT1YRPPIF` | Runtimeから既存Knowledge Baseを検索するため。ワイルドカードは使用しない |
 | `logs:CreateLogGroup`, `logs:DescribeLogGroups` | `log-group:*` | AgentCoreがロググループ名を決めるため事前にARNを固定できない。**このワイルドカードはAWS側の設計制約による** |
 | `logs:DescribeLogStreams`, `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/bedrock-agentcore/runtimes/*` | AgentCore Runtimeのロググループ配下に限定 |
 | S3読み取り（`grantRead`） | CodeZip用バケット | Runtime起動時の成果物取得のみ |

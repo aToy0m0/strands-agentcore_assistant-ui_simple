@@ -13,6 +13,7 @@ Browser
             ├─ Bedrockモデルをストリーミング実行
             ├─ AgentCore Memoryから履歴・個人メモリを取得
             ├─ 組み込みツールを実行
+            ├─ Bedrock Knowledge Baseを検索
             ├─ AgentCore Gateway経由でLambdaツールを実行
             └─ AG-UI SSEイベントをBrowserへ返す
 ```
@@ -31,6 +32,7 @@ Browser
 | 履歴 | 会話削除 | 対象スレッドのMemoryイベントを削除 |
 | 個人メモリ | 長期記憶検索 | ユーザー固有の事実と好みを意味検索し、システムプロンプトへ追加 |
 | ツール | 組み込みツール | 計算、日時、文字統計、ユーザーへの確認を提供 |
+| ツール | Knowledge Base検索 | `SAT1YRPPIF`へ`Retrieve`を実行し、本文と出典を返す |
 | ツール | Gateway連携 | Cognitoトークンを引き継ぎ、MCPでGatewayターゲットを利用 |
 | Human in the loop | 実行中断と再開 | `ask_user`で実行を中断し、AG-UIのresume入力で同じAgentを再開 |
 | ログ | 構造化ログ | request、model、tool、errorを1行JSONで出力 |
@@ -105,6 +107,9 @@ AgentCore MemoryのManaged Memory Strategyを利用します。
 | `current_datetime` | 現在日時とタイムゾーン変換 | 有効なIANAタイムゾーンのみ |
 | `text_statistics` | 文字、単語、行、バイト数などを集計 | 最大100,000 UTF-16コード単位、有効なlocaleのみ |
 | `ask_user` | 不足情報をユーザーへ質問 | 質問500文字、選択肢2～6件、自由入力可否を指定可能 |
+| `search_knowledge_base` | 既存Knowledge Baseの意味検索 | 検索語1～1,000文字、取得件数1～10件（既定5件） |
+
+`search_knowledge_base`はRuntimeのAWS認証情報を使ってBedrock `Retrieve` APIを直接呼びます。結果にはKnowledge Base ID、本文、スコア、文書ID、メタデータ、出典位置を含めます。0件は正常結果として返し、AWS API失敗は成功結果へ置き換えず、Knowledge Base ID、AWSエラー名、取得できた場合はリクエストIDを含むエラーにします。
 
 ### Gatewayツール
 
@@ -143,6 +148,7 @@ request、model、toolはCDKコンテキストから個別に無効化できま�
 | `runtime/src/main.ts` | Agent、Memory、Gateway、interrupt再開の統合 |
 | `runtime/src/app.ts` | HTTP、認証、履歴操作、AG-UI SSE |
 | `runtime/src/memory.ts` | 短期履歴と長期記憶 |
+| `runtime/src/knowledge-base.ts` | Bedrock Knowledge Base検索ツール |
 | `runtime/src/model-factory.ts` | モデルごとのBedrock設定 |
 | `runtime/src/stream-events.ts` | StrandsからAG-UIへのイベント変換 |
 | `runtime/src/tools.ts` | 組み込みツールと`ask_user` |

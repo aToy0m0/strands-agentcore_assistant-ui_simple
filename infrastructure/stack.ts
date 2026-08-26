@@ -36,6 +36,7 @@ import { resolveLoginMethods, showsCognitoLogin, showsEntraLogin } from "../shar
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const entraProviderName = "MicrosoftEntraID";
+export const KNOWLEDGE_BASE_ID = "SAT1YRPPIF";
 
 /** CloudWatch Logsが受け付ける保持日数。ここにない値はCloudFormationが拒否する。 */
 const RETENTION_BY_DAYS = new Map<number, RetentionDays>(
@@ -321,6 +322,11 @@ export class WorkmateCodeZipStack extends Stack {
         ]
         : model.foundationModelIds.map((foundationModelId) => `arn:${this.partition}:bedrock:${this.region}::foundation-model/${foundationModelId}`)),
     }));
+    runtimeRole.addToPolicy(new PolicyStatement({
+      effect: Effect.ALLOW,
+      actions: ["bedrock:Retrieve"],
+      resources: [`arn:${this.partition}:bedrock:${this.region}:${this.account}:knowledge-base/${KNOWLEDGE_BASE_ID}`],
+    }));
     // AgentCore Runtimeが自身のロググループへ書けるようにする。これがないとログが1行も残らない。
     runtimeRole.addToPolicy(new PolicyStatement({
       effect: Effect.ALLOW,
@@ -351,6 +357,7 @@ export class WorkmateCodeZipStack extends Stack {
       environmentVariables: {
         AWS_REGION: this.region,
         GATEWAY_URL: toolGateway.gatewayUrl!,
+        KNOWLEDGE_BASE_ID,
         MEMORY_ID: memory.memoryId,
         ...runtimeLogEnvironment,
       },

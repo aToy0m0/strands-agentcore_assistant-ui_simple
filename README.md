@@ -21,6 +21,7 @@ Browser
      -> optional: Microsoft Entra ID (OIDC)
   -> AgentCore Runtime (Bearer JWT / AG-UI SSE)
        -> Bedrock models
+       -> Bedrock Knowledge Base SAT1YRPPIF (Retrieve)
        -> AgentCore Gateway (Bearer JWT / MCP)
             -> Lambda support-directory tool
        -> AgentCore Memory
@@ -49,6 +50,10 @@ CloudFormation / CDK
 Runtimeは、AgentCore Runtimeで検証済みのCognitoアクセストークンをAgentCore Gatewayへ引き継ぎ、StrandsのMCPクライアントとして接続します。Gatewayも同じUser PoolとApp ClientでJWTを検証し、Gatewayの実行ロールがLambdaターゲットを呼び出します。
 
 サンプルの`lookup_support_contact`は、`sales`、`support`、`billing`のいずれかを受け取り、固定の問い合わせメールアドレスと営業時間を返す読み取り専用ツールです。入力スキーマはGatewayで公開し、Lambdaでも許可値を検証します。
+
+## Knowledge Base検索ツール
+
+組み込みの`search_knowledge_base`は、既存のBedrock Knowledge Base `SAT1YRPPIF`へRuntimeから`Retrieve`を直接実行します。検索語と取得件数（1～10件、既定5件）を受け取り、本文、スコア、文書ID、メタデータ、出典位置を返します。Runtime実行ロールの`bedrock:Retrieve`はこのKnowledge Base ARNだけに限定しています。Knowledge Base本体やデータソースは本スタックで作成・変更・削除しません。
 
 ## UIと履歴
 
@@ -116,6 +121,7 @@ X-Rayトレースとスパン（CloudWatch GenAI Observability）は含めてい
 - 非公開CodeZip S3バケット / BucketDeployment
 - AgentCore Runtime実行ロール
 - AgentCore CodeZip Runtime（AGUI、Cognito JWT authorizer）
+- 既存Knowledge Base `SAT1YRPPIF`への参照設定と最小権限
 - AgentCore Gateway（MCP、Cognito JWT authorizer）/ 問い合わせ先検索Lambdaターゲット
 - AgentCore Memory（短期履歴、個人の事実・好み）/ 暗号化用KMSキー
 
