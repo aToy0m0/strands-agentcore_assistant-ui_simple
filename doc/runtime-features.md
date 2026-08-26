@@ -123,6 +123,8 @@ Runtimeは`McpClient`でAgentCore Gatewayへ接続します。ブラウザから
 
 中断中のAgent、Gateway接続、途中までの回答はRuntimeプロセス内のMapへ一時保持します。このため、Runtime再起動、プロセス消失、別インスタンスへのルーティングをまたぐ永続的な再開は保証しません。未回答のまま同じスレッドで新しい通常実行を始めることも拒否します。
 
+これは既知の不具合です。AgentCore Runtimeのアイドルタイムアウトは300秒であり、回答待ちの間にRuntimeが終了すると、再開時に`Interrupted agent state is unavailable; start the request again`となり、UIには`AGENT_INVOCATION_FAILED`が表示されます。AgentCore Memoryは会話履歴と個人メモリを保存しますが、Strands内部のinterrupt状態は保存しません。根本対応には、StrandsのSession Managerと永続ストレージによる中断状態の保存・復元が必要です。
+
 ## ログとエラー処理
 
 - `request`: 受信メッセージと実行識別子

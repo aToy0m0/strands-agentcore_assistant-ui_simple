@@ -135,6 +135,29 @@ X-Rayトレースとスパン（CloudWatch GenAI Observability）は含めてい
 
 ## 既知の不具合
 
+### `ask_user`への回答が遅れるとエージェントの再開に失敗する
+
+`ask_user`が追加質問を表示してから回答までに時間が空くと、次のエラーが表示されることがあります。
+
+```text
+エージェントの実行に失敗しました
+AGENT_INVOCATION_FAILED
+```
+
+Runtimeログには次の原因が記録されます。
+
+```text
+Interrupted agent state is unavailable; start the request again
+```
+
+`ask_user`で中断したAgentの状態をRuntimeプロセス内のMapだけに保存しており、StrandsのSession Managerによる永続化を実装していないことが原因です。AgentCore Runtimeのアイドルタイムアウトは300秒であるため、回答前にRuntimeが終了した場合や、再開リクエストが別インスタンスへルーティングされた場合は中断状態を復元できません。AgentCore Memoryに保存している会話履歴と個人メモリには、Strands内部のinterrupt状態は含まれません。
+
+2026-08-26の実環境では、Knowledge Base検索後に`ask_user`が発生し、約8分後に回答したケースで再現しました。Knowledge Base検索自体は正常に完了しており、Knowledge BaseのIAM権限や接続不良が原因ではありません。
+
+暫定回避策は、エラーになったスレッドで回答を再送せず、新しい通常メッセージとして質問をやり直すことです。アイドルタイムアウトの延長だけでは、別インスタンスへのルーティングやRuntime再起動による状態消失を防げないため、根本対策にはなりません。
+
+根本対応では、StrandsのSession ManagerとS3などの永続ストレージを導入し、認証ユーザーとスレッドごとにinterrupt状態を保存・復元する必要があります。別案として、`ask_user`をStrandsのinterrupt/resumeではなく通常の会話ターンとして扱う設計もありますが、その場合はStrands標準の再開方式から外れます。現在はいずれも未実装です。詳細な現行仕様は[Runtime機能一覧の「Human in the loop」](doc/runtime-features.md#human-in-the-loop)を参照してください。
+
 ### Claude Sonnet 5はアカウントによって実行を拒否される
 
 モデル選択肢に`Claude Sonnet 5`を含めていますが、AWSアカウントによっては実行時に次のエラーになります。
