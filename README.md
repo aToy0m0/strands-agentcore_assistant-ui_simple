@@ -21,7 +21,7 @@ Browser
      -> optional: Microsoft Entra ID (OIDC)
   -> AgentCore Runtime (Bearer JWT / AG-UI SSE)
        -> Bedrock models
-       -> Bedrock Knowledge Base SAT1YRPPIF (Retrieve)
+       -> configured Bedrock Knowledge Base (Retrieve)
        -> AgentCore Gateway (Bearer JWT / MCP)
             -> Lambda support-directory tool
        -> AgentCore Memory
@@ -53,7 +53,7 @@ Runtimeは、AgentCore Runtimeで検証済みのCognitoアクセストークン�
 
 ## Knowledge Base検索ツール
 
-組み込みの`search_knowledge_base`は、既存のBedrock Knowledge Base `SAT1YRPPIF`へRuntimeから`Retrieve`を直接実行します。検索語と取得件数（1～10件、既定5件）を受け取り、本文、スコア、文書ID、メタデータ、出典位置を返します。Runtime実行ロールの`bedrock:Retrieve`はこのKnowledge Base ARNだけに限定しています。Knowledge Base本体やデータソースは本スタックで作成・変更・削除しません。
+組み込みの`search_knowledge_base`は、デプロイ時に指定した既存のBedrock Knowledge BaseへRuntimeから`Retrieve`を直接実行します。検索語と取得件数（1～10件、既定5件）を受け取り、本文、スコア、文書ID、メタデータ、出典位置を返します。Runtime実行ロールの`bedrock:Retrieve`は指定したKnowledge Base ARNだけに限定しています。Knowledge Base本体やデータソースは本スタックで作成・変更・削除しません。
 
 ## UIと履歴
 
@@ -75,7 +75,7 @@ Dockerは不要です。CodeZipと静的フロントエンドだけをビルド�
 
 ローカル検証、デプロイ、Microsoft Entra ID連携、削除の手順は[デプロイ手順書](doc/deployment-guide.md)にまとめています。
 
-2回目以降のデプロイでは、Git管理外の`scripts/deploy-config.psd1`へAWSプロファイル、リージョン、認証、ログ、デバッグの設定を保存し、次のコマンドを使用できます。必須値が空の場合はビルド前に停止します。AWSプロファイルの初期値は`default`です。
+2回目以降のデプロイでは、Git管理外の`scripts/deploy-config.psd1`へAWSプロファイル、リージョン、Knowledge Base ID、認証、ログ、デバッグの設定を保存し、次のコマンドを使用できます。必須値が空の場合はビルド前に停止します。AWSプロファイルの初期値は`default`です。
 
 ```powershell
 .\scripts\Deploy-Workmate.ps1
@@ -121,7 +121,7 @@ X-Rayトレースとスパン（CloudWatch GenAI Observability）は含めてい
 - 非公開CodeZip S3バケット / BucketDeployment
 - AgentCore Runtime実行ロール
 - AgentCore CodeZip Runtime（AGUI、Cognito JWT authorizer）
-- 既存Knowledge Base `SAT1YRPPIF`への参照設定と最小権限
+- デプロイ時に指定した既存Knowledge Baseへの参照設定と最小権限
 - AgentCore Gateway（MCP、Cognito JWT authorizer）/ 問い合わせ先検索Lambdaターゲット
 - AgentCore Memory（短期履歴、個人の事実・好み）/ 暗号化用KMSキー
 

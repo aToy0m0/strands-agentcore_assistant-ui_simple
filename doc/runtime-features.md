@@ -32,7 +32,7 @@ Browser
 | 履歴 | 会話削除 | 対象スレッドのMemoryイベントを削除 |
 | 個人メモリ | 長期記憶検索 | ユーザー固有の事実と好みを意味検索し、システムプロンプトへ追加 |
 | ツール | 組み込みツール | 計算、日時、文字統計、ユーザーへの確認を提供 |
-| ツール | Knowledge Base検索 | `SAT1YRPPIF`へ`Retrieve`を実行し、本文と出典を返す |
+| ツール | Knowledge Base検索 | デプロイ時に指定したKnowledge Baseへ`Retrieve`を実行し、本文と出典を返す |
 | ツール | Gateway連携 | Cognitoトークンを引き継ぎ、MCPでGatewayターゲットを利用 |
 | Human in the loop | 実行中断と再開 | `ask_user`で実行を中断し、AG-UIのresume入力で同じAgentを再開 |
 | ログ | 構造化ログ | request、model、tool、errorを1行JSONで出力 |

@@ -96,7 +96,7 @@ Runtime実行ロールとGateway実行ロールの権限を用途別に分離し
 | 権限 | リソース | 備考 |
 |---|---|---|
 | `bedrock:InvokeModel`, `bedrock:InvokeModelWithResponseStream` | モデルカタログに定義したinference profileとfoundation modelのARN | US Geo Inference Profileを使うモデルは`us-east-1` / `us-east-2` / `us-west-2`のfoundation model ARNも許可する。クロスリージョン推論の実行先がこの3リージョンに及ぶため |
-| `bedrock:Retrieve` | `knowledge-base/SAT1YRPPIF` | Runtimeから既存Knowledge Baseを検索するため。ワイルドカードは使用しない |
+| `bedrock:Retrieve` | デプロイ時に指定したKnowledge Base ARN | Runtimeから既存Knowledge Baseを検索するため。ワイルドカードは使用しない |
 | `logs:CreateLogGroup`, `logs:DescribeLogGroups` | `log-group:*` | AgentCoreがロググループ名を決めるため事前にARNを固定できない。**このワイルドカードはAWS側の設計制約による** |
 | `logs:DescribeLogStreams`, `logs:CreateLogStream`, `logs:PutLogEvents` | `/aws/bedrock-agentcore/runtimes/*` | AgentCore Runtimeのロググループ配下に限定 |
 | S3読み取り（`grantRead`） | CodeZip用バケット | Runtime起動時の成果物取得のみ |

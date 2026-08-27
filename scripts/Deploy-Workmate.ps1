@@ -24,6 +24,10 @@ function Get-RequiredConfigString {
 $profile = Get-RequiredConfigString "Profile"
 $region = Get-RequiredConfigString "Region"
 $webDebugMode = Get-RequiredConfigString "WebDebugMode"
+$knowledgeBaseId = Get-RequiredConfigString "KnowledgeBaseId"
+if ($knowledgeBaseId -notmatch '^[0-9A-Z]{10}$') {
+    throw "Deployment config 'KnowledgeBaseId' must be a 10-character uppercase alphanumeric ID."
+}
 if ($webDebugMode -notin @("on", "off")) {
     throw "Deployment config 'WebDebugMode' must be 'on' or 'off'."
 }
@@ -58,7 +62,12 @@ foreach ($entry in $optionalContexts.GetEnumerator()) {
 }
 $contexts.webDebugMode = $webDebugMode
 
-$npmArguments = @("run", "deploy", "--", "--profile", $profile, "--region", $region)
+$npmArguments = @(
+    "run", "deploy", "--",
+    "--profile", $profile,
+    "--region", $region,
+    "--parameters", "WorkmateCodeZipStack:KnowledgeBaseId=$knowledgeBaseId"
+)
 foreach ($entry in $contexts.GetEnumerator()) {
     $npmArguments += @("-c", "$($entry.Key)=$($entry.Value)")
 }

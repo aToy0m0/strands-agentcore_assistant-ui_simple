@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CfnOutput, Duration, Fn, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
+import { CfnOutput, CfnParameter, Duration, Fn, RemovalPolicy, SecretValue, Stack, type StackProps } from "aws-cdk-lib";
 import {
   CfnRuntime,
   Gateway,
@@ -36,7 +36,6 @@ import { resolveLoginMethods, showsCognitoLogin, showsEntraLogin } from "../shar
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const entraProviderName = "MicrosoftEntraID";
-export const KNOWLEDGE_BASE_ID = "SAT1YRPPIF";
 
 /** CloudWatch Logsが受け付ける保持日数。ここにない値はCloudFormationが拒否する。 */
 const RETENTION_BY_DAYS = new Map<number, RetentionDays>(
@@ -100,6 +99,12 @@ export class WorkmateCodeZipStack extends Stack {
     const logRetention = resolveLogRetention(this.node.tryGetContext("logRetentionDays"));
     const runtimeLogEnvironment = runtimeLogSettings(this);
     const webDebugMode = resolveWebDebugMode(this.node.tryGetContext("webDebugMode"));
+    const knowledgeBaseId = new CfnParameter(this, "KnowledgeBaseId", {
+      type: "String",
+      allowedPattern: "[0-9A-Z]{10}",
+      constraintDescription: "must be a 10-character uppercase alphanumeric Bedrock Knowledge Base ID",
+      description: "Existing Bedrock Knowledge Base used by the runtime search tool",
+    });
 
     const webBucket = new Bucket(this, "WebAssets", {
       encryption: BucketEncryption.S3_MANAGED,
@@ -325,7 +330,7 @@ export class WorkmateCodeZipStack extends Stack {
     runtimeRole.addToPolicy(new PolicyStatement({
       effect: Effect.ALLOW,
       actions: ["bedrock:Retrieve"],
-      resources: [`arn:${this.partition}:bedrock:${this.region}:${this.account}:knowledge-base/${KNOWLEDGE_BASE_ID}`],
+      resources: [`arn:${this.partition}:bedrock:${this.region}:${this.account}:knowledge-base/${knowledgeBaseId.valueAsString}`],
     }));
     // AgentCore Runtimeが自身のロググループへ書けるようにする。これがないとログが1行も残らない。
     runtimeRole.addToPolicy(new PolicyStatement({
@@ -357,7 +362,7 @@ export class WorkmateCodeZipStack extends Stack {
       environmentVariables: {
         AWS_REGION: this.region,
         GATEWAY_URL: toolGateway.gatewayUrl!,
-        KNOWLEDGE_BASE_ID,
+        KNOWLEDGE_BASE_ID: knowledgeBaseId.valueAsString,
         MEMORY_ID: memory.memoryId,
         ...runtimeLogEnvironment,
       },

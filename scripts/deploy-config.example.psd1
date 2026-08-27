@@ -3,6 +3,7 @@
   Region               = "us-east-1"
   WebDebugMode         = "off"
   CognitoDomainPrefix  = "<unique-domain-prefix>"
+  KnowledgeBaseId     = "<bedrock-knowledge-base-id>"
   EntraEnabled         = $true
   EntraTenantId        = "<entra-tenant-id>"
   EntraClientId        = "<entra-application-client-id>"

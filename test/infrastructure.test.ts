@@ -1,7 +1,7 @@
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { describe, expect, it } from "vitest";
-import { KNOWLEDGE_BASE_ID, WorkmateCodeZipStack, resolveLogRetention, resolveWebDebugMode } from "../infrastructure/stack.js";
+import { WorkmateCodeZipStack, resolveLogRetention, resolveWebDebugMode } from "../infrastructure/stack.js";
 import { RetentionDays } from "aws-cdk-lib/aws-logs";
 
 function template(context: Record<string, unknown> = {}) {
@@ -56,14 +56,19 @@ describe("WorkmateCodeZipStack", () => {
 
   it("既存Knowledge BaseだけをRuntimeへ接続する", () => {
     const value = template({ cognitoDomainPrefix: "workmate12-test" });
+    value.hasParameter("KnowledgeBaseId", {
+      Type: "String",
+      AllowedPattern: "[0-9A-Z]{10}",
+    });
     value.hasResourceProperties("AWS::BedrockAgentCore::Runtime", Match.objectLike({
-      EnvironmentVariables: Match.objectLike({ KNOWLEDGE_BASE_ID }),
+      EnvironmentVariables: Match.objectLike({ KNOWLEDGE_BASE_ID: { Ref: "KnowledgeBaseId" } }),
     }));
     const policies = value.findResources("AWS::IAM::Policy");
     const statements = Object.values(policies).flatMap((policy) => policy.Properties.PolicyDocument.Statement);
     const retrieveStatements = statements.filter((statement) => statement.Action === "bedrock:Retrieve");
     expect(retrieveStatements).toHaveLength(1);
-    expect(JSON.stringify(retrieveStatements[0].Resource)).toContain(`knowledge-base/${KNOWLEDGE_BASE_ID}`);
+    expect(JSON.stringify(retrieveStatements[0].Resource)).toContain("knowledge-base/");
+    expect(JSON.stringify(retrieveStatements[0].Resource)).toContain('"Ref":"KnowledgeBaseId"');
     expect(JSON.stringify(retrieveStatements[0].Resource)).not.toContain("knowledge-base/*");
   });
 
